@@ -11,7 +11,7 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom};
 
 
 /* TODO: this would be better if we didn't indirect twice to the data
- * but that would require our own version of Arc and Vec... It shouldn't 
+ * but that would require our own version of Arc and Vec... It shouldn't
  * be that bad but its just not important right now.
  */
 #[derive(Clone,Debug)]
@@ -65,15 +65,23 @@ impl SharedReadBuffer {
       limit: cmp::min(self.limit, self.pos + length)
     }
   }
- 
+
+ #[inline]
   pub fn len(&self) -> usize {
     self.limit - self.offset
   }
 
+  #[inline]
   pub fn remaining(&self) -> usize {
     self.limit - self.pos
   }
 
+  #[inline]
+  pub fn is_empty(&self) -> bool {
+      self.remaining() > 0
+  }
+
+  #[inline]
   pub fn pos(&self) -> usize {
     self.pos - self.offset
   }
@@ -87,7 +95,7 @@ impl SharedReadBuffer {
 
 impl fmt::Display for SharedReadBuffer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "SharedReadBuffer(length: {}, pos: {})", 
+        write!(f, "SharedReadBuffer(length: {}, pos: {})",
                self.len(), self.pos())
     }
 }
@@ -135,7 +143,7 @@ impl io::Seek for SharedReadBuffer {
     };
 
     if next_pos < (self.offset as i64) {
-      Err(io::Error::new(ErrorKind::InvalidInput, 
+      Err(io::Error::new(ErrorKind::InvalidInput,
              "Invalid seek to a negative position"))
     } else {
       let next_pos = cmp::min(next_pos as usize, self.limit);
@@ -175,7 +183,7 @@ fn can_slice() {
   let mut c = b.slice(2);
   assert_eq!(c.len(), 2);
   assert_eq!(c.remaining(), 2);
-  
+
   // need some [u8] space
   let mut space = [0;2];
 
@@ -249,4 +257,4 @@ fn slice_then_seek() {
   assert_eq!(c.len(), 4);
   assert_eq!(c.remaining(), 2);
 
-}  
+}

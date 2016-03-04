@@ -10,13 +10,15 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 pub type Contexts = Vec<(Vec<u8>, Vec<u8>)>;
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug)]
-pub enum Error {
-    Error(std::io::Error),
-    Incomplete(Option<usize>),
-}
+pub const MSG_TDISPATCH: i8 = 2;
+pub const MSG_RDISPATCH: i8 = -2;
+pub const MSG_TINIT: i8 = 68;
+pub const MSG_RINIT: i8 = -68;
+pub const MSG_TDRAIN: i8 = 64;
+pub const MSG_RDRAIN: i8 = -64;
+pub const MSG_TPING: i8 = 65;
+pub const MSG_RPING: i8 = -65;
+pub const MSG_RERR: i8 = -128;
 
 // extract a value from the byteorder::Result
 macro_rules! tryb {
@@ -24,26 +26,26 @@ macro_rules! tryb {
         match $e {
             Ok(r) => r,
             Err(byteorder::Error::UnexpectedEOF) => {
-                return Err(Error::Incomplete(None))
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "End of input"
+                ))
             }
             Err(byteorder::Error::Io(err)) => {
-                return Err(Error::Error(err))
+                return Err(err)
             }
         }
     )
 }
 
-// extract a value from the io::Result
-macro_rules! tryi {
-    ($e:expr) => (
-        match $e {
-            Ok(r) => r,
-            Err(err) => return Err(Error::Error(err)),
-        }
-    )
+#[derive(Debug)]
+pub struct MuxPacket {
+    pub tpe: i8,
+    pub tag: Tag,
+    pub buffer: SharedReadBuffer,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Tag {
     pub end: bool,
     pub id: u32,
@@ -113,9 +115,9 @@ impl Tag {
         }
     }
 
-    pub fn decode_tag<T: Read>(r: &mut T) -> Result<Tag> {
+    pub fn decode_tag<T: Read>(r: &mut T) -> io::Result<Tag> {
         let mut bts = [0; 3];
-        let _ = tryi!(r.read(&mut bts));
+        let _ = try!(r.read(&mut bts));
 
         let id = (!(1 << 23)) &  // clear the last bit, its for the end flag
                 ((bts[0] as u32) << 16 |
@@ -129,35 +131,20 @@ impl Tag {
     }
 
     #[inline]
-    pub fn encode_tag(buffer: &mut Write, tag: &Tag) -> Result<()> {
-        let endbit = if tag.end {
-            1
-        } else {
-            0
-        };
-        let bts = [(tag.id >> 16 & 0x7f) as u8 | (endbit << 7),
-                   (tag.id >> 8 & 0xff) as u8,
-                   (tag.id & 0xff) as u8];
+    pub fn to_bytes(&self) -> [u8;3] {
+        let endbit = if self.end { 1 } else { 0 };
+        [(self.id >> 16 & 0x7f) as u8 | (endbit << 7),
+            (self.id >> 8 & 0xff) as u8,
+            (self.id >> 0 & 0xff) as u8]
+    }
 
-        tryi!(buffer.write_all(&bts));
+    #[inline]
+    pub fn encode_tag(buffer: &mut Write, tag: &Tag) -> io::Result<()> {
+        let bts = tag.to_bytes();
+        try!(buffer.write_all(&bts));
         Ok(())
     }
 }
-
-impl Error {
-    pub fn new<E>(kind: io::ErrorKind, msg: E) -> Error
-        where E: Into<Box<std::error::Error + Send + Sync>>
-    {
-        Error::Error(io::Error::new(kind, msg))
-    }
-
-    pub fn failed<E, R>(kind: io::ErrorKind, msg: E) -> Result<R>
-        where E: Into<Box<std::error::Error + Send + Sync>>
-    {
-        Err(Error::new(kind, msg))
-    }
-}
-
 
 impl Init {
     pub fn frame_size(&self) -> usize {
@@ -205,15 +192,15 @@ impl MessageFrame {
 
     pub fn frame_id(&self) -> i8 {
         match self {
-            &MessageFrame::Tdispatch(_) => 2,
-            &MessageFrame::Rdispatch(_) => -2,
-            &MessageFrame::TInit(_) => 68,
-            &MessageFrame::RInit(_) => -68,
-            &MessageFrame::TDrain => 64,
-            &MessageFrame::RDrain => -64,
-            &MessageFrame::TPing => 65,
-            &MessageFrame::RPing => -65,
-            &MessageFrame::RErr(_) => -128,
+            &MessageFrame::Tdispatch(_) => MSG_TDISPATCH,
+            &MessageFrame::Rdispatch(_) => MSG_RDISPATCH,
+            &MessageFrame::TInit(_) => MSG_TINIT,
+            &MessageFrame::RInit(_) => MSG_RINIT,
+            &MessageFrame::TDrain => MSG_TDRAIN,
+            &MessageFrame::RDrain => MSG_RDRAIN,
+            &MessageFrame::TPing => MSG_TPING,
+            &MessageFrame::RPing => MSG_RPING,
+            &MessageFrame::RErr(_) => MSG_RERR,
         }
     }
 }
@@ -254,15 +241,17 @@ impl Tdispatch {
         size
     }
 
+    pub fn basic_(dest: String, body: SharedReadBuffer) -> Tdispatch {
+        Tdispatch {
+            contexts: Vec::new(),
+            dest: dest,
+            dtable: DTable::new(),
+            body: body,
+        }
+    }
+
     pub fn basic(dest: String, body: SharedReadBuffer) -> MessageFrame {
-        MessageFrame::Tdispatch(
-            Tdispatch {
-                contexts: Vec::new(),
-                dest: dest,
-                dtable: DTable::new(),
-                body: body,
-            }
-        )
+        MessageFrame::Tdispatch(Tdispatch::basic_(dest, body))
     }
 }
 
@@ -272,7 +261,8 @@ impl Rdispatch {
     }
 }
 
-pub fn encode_message(buffer: &mut Write, msg: &Message) -> Result<()> {
+// write the message to the Write
+pub fn encode_message(buffer: &mut Write, msg: &Message) -> io::Result<()> {
     // the size is the buffer size + the header (id + tag)
     tryb!(buffer.write_i32::<BigEndian>(msg.frame.frame_size() as i32 + 4));
     tryb!(buffer.write_i8(msg.frame.frame_id()));
@@ -281,7 +271,7 @@ pub fn encode_message(buffer: &mut Write, msg: &Message) -> Result<()> {
     encode_frame(buffer, &msg.frame)
 }
 
-fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> Result<()> {
+fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
     match frame {
         &MessageFrame::Tdispatch(ref f) => frames::encode_tdispatch(buffer, f),
         &MessageFrame::Rdispatch(ref f) => frames::encode_rdispatch(buffer, f),
@@ -292,13 +282,13 @@ fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> Result<()> {
         &MessageFrame::TDrain => Ok(()),
         &MessageFrame::RDrain => Ok(()),
         &MessageFrame::RErr(ref msg) => {
-            tryi!(buffer.write_all(msg.as_bytes()));
+            try!(buffer.write_all(msg.as_bytes()));
             Ok(())
         }
     }
 }
 
-pub fn decode_frame(id: i8, buffer: SharedReadBuffer) -> Result<MessageFrame> {
+pub fn decode_frame(id: i8, buffer: SharedReadBuffer) -> io::Result<MessageFrame> {
     Ok(match id {
         2 => MessageFrame::Tdispatch(try!(frames::decode_tdispatch(buffer))),
         -2 => MessageFrame::Rdispatch(try!(frames::decode_rdispatch(buffer))),
@@ -310,51 +300,55 @@ pub fn decode_frame(id: i8, buffer: SharedReadBuffer) -> Result<MessageFrame> {
         -65 => MessageFrame::RPing,
         -128 => MessageFrame::RErr(try!(frames::decode_rerr(buffer))),
         other => {
-            return Error::failed(io::ErrorKind::InvalidInput,
-                                 format!("Invalid frame id: {}", other));
+            return Err(
+                io::Error::new(io::ErrorKind::InvalidInput,
+                    format!("Invalid frame id: {}", other))
+                );
         }
     })
 }
 
-// This is a synchronous function that will read a whole message from the `Read`
-pub fn read_message(input: &mut Read) -> Result<Message> {
+// Read an entire frame buffer
+pub fn read_frame(input: &mut Read) -> io::Result<MuxPacket> {
     let size = {
         let size = tryb!(input.read_i32::<BigEndian>());
-        if size < 0 {
-            return Error::failed(io::ErrorKind::InvalidData, "Invalid mux frame size");
+        if size < 4 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData, "Invalid mux frame size"
+            ));
         }
         size as usize
     };
 
     let mut buf = vec![0;size];
-    tryi!(input.read_exact(&mut buf));
-    let buf = SharedReadBuffer::new(buf);
-    decode_message(buf)
+    try!(input.read_exact(&mut buf));
+    let mut buf = SharedReadBuffer::new(buf);
+    let tpe = tryb!(buf.read_i8());
+    let tag = try!(Tag::decode_tag(&mut buf));
+    Ok(MuxPacket {
+        tpe: tpe,
+        tag: tag,
+        buffer: buf,
+    })
+}
+
+// This is a synchronous function that will read a whole message from the `Read`
+pub fn read_message(input: &mut Read) -> io::Result<Message> {
+    let packet = try!(read_frame(input));
+    decode_message(packet)
 }
 
 // expects a SharedReadBuffer of the whole mux frame
-pub fn decode_message(mut input: SharedReadBuffer) -> Result<Message> {
-    let remaining = input.remaining();
-
-    if remaining < 4 {
-        return Error::failed(io::ErrorKind::InvalidData, "Invalid mux frame size");
-    }
-
-    let tpe = tryb!(input.read_i8());
-    let tag = try!(Tag::decode_tag(&mut input));
-
-    let msg_buff = input.consume_remaining();
-    debug_assert_eq!(msg_buff.remaining(), remaining - 4);
-
-    let frame = try!(decode_frame(tpe, msg_buff));
-
+pub fn decode_message(input: MuxPacket) -> io::Result<Message> {
+    let frame = try!(decode_frame(input.tpe, input.buffer));
     Ok(Message {
-        tag: tag,
+        tag: input.tag,
         frame: frame,
     })
 }
 
 pub mod frames;
+pub mod session;
 
 #[cfg(test)]
 mod tests;
