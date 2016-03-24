@@ -5,6 +5,8 @@ authors = ["Bryce Anderson <bryce.anderson22@gmail.com>"]
 
 [dependencies]
 byteorder = "0.4.2"
+time = "0.1.34"
+rand = "0.3.14"
 
 [dependencies.sharedbuffer]
 path = "./lib/sharedbuffer/"

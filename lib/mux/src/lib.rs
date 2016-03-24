@@ -62,7 +62,7 @@ pub struct Message {
     pub frame: MessageFrame,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum MessageFrame {
     Tdispatch(Tdispatch),
     Rdispatch(Rdispatch),
@@ -277,6 +277,7 @@ fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
         &MessageFrame::Rdispatch(ref f) => frames::encode_rdispatch(buffer, f),
         &MessageFrame::TInit(ref f) => frames::encode_init(buffer, f),
         &MessageFrame::RInit(ref f) => frames::encode_init(buffer, f),
+        // the following are empty messages
         &MessageFrame::TPing => Ok(()),
         &MessageFrame::RPing => Ok(()),
         &MessageFrame::TDrain => Ok(()),

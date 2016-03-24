@@ -1,93 +1,58 @@
 extern crate sharedbuffer;
-extern crate byteorder;
 extern crate mux;
+
+extern crate byteorder;
+extern crate rand;
 
 use mux::session::*;
 
 use sharedbuffer::SharedReadBuffer;
 
 use std::net::TcpStream;
-use std::io::{Read, Write};
 use std::sync::Arc;
 use std::thread;
-
-fn test_trequest<S: Read+Write>(socket: &mut S) {
-
-    let v = "Hello, world!".to_string().into_bytes();
-    let b = SharedReadBuffer::new(v);
-
-    let frame = mux::Tdispatch::basic("/foo".to_string(), b);
-    let msg = mux::Message::end(1, frame);
-
-    let mut buf = Vec::new();
-    mux::encode_message(&mut buf, &msg).unwrap();
-
-    for _ in 0..20 {
-        socket.write_all(&buf).unwrap();
-
-        let msg = mux::read_message(socket).unwrap();
-
-        match &msg.frame {
-            &mux::MessageFrame::Rdispatch(ref msg) => {
-                let s = std::str::from_utf8(&msg.body).unwrap();
-                println!("Response: {}", s);
-            }
-            other => {
-                panic!(format!("Recieved unexpected frame: {:?}", other));
-            }
-        }
-    }
-}
-
-fn test_ping<S: Read+Write>(socket: &mut S) {
-    let msg = mux::Message::end(2, mux::MessageFrame::TPing);
-    let mut buf = Vec::new();
-    mux::encode_message(&mut buf, &msg).unwrap();
-
-    socket.write_all(&buf).unwrap();
-
-    let msg = mux::read_message(socket).unwrap();
-    match &msg.frame {
-        &mux::MessageFrame::RPing => {
-            println!("Ping successful!");
-        }
-        other => {
-            panic!(format!("Received unexpected frame: {:?}", other));
-        }
-    }
-}
+use std::time::Duration;
 
 fn test_session(socket: TcpStream) {
 
     let session = Arc::new(MuxSession::new(socket).unwrap());
 
-    let threads: Vec<thread::JoinHandle<()>> = (0..50).map(|id| {
+    let res = session.ping().unwrap();
+    println!("Ping time: {:?}", res);
+
+    let threads: Vec<thread::JoinHandle<Duration>> = (0..50).map(|id| {
         let session = session.clone();
 
         thread::spawn(move || {
-            for _ in 0..1_000_000 {
-                let v = format!("Hello, world: {}", id).into_bytes();
-                let b = SharedReadBuffer::new(v);
-                let frame = mux::Tdispatch::basic_("/foo".to_string(), b);
+            let mut ping_time = Duration::new(0, 0);
+            let iters = 1_000_000;
+            for _ in 0..iters {
+                if rand::random::<u8>() > 64 {
+                    let v = format!("Hello, world: {}", id).into_bytes();
+                    let b = SharedReadBuffer::new(v);
+                    let frame = mux::Tdispatch::basic_("/foo".to_string(), b);
 
-                let resp = session.dispatch(&frame).unwrap();
-                let s = std::str::from_utf8(&resp.body).unwrap();
+                    let resp = session.dispatch(&frame).unwrap();
+                    let _ = std::str::from_utf8(&resp.body).unwrap();
+                } else {
+                    ping_time = ping_time + session.ping().unwrap();
+                }
             }
+            ping_time/(iters as u32)
         })
     }).collect();
 
+    let mut total_ping = Duration::new(0, 0);
+    let threadc = threads.len() as u32;
     for t in threads {
-        let _ = t.join();
+        total_ping = total_ping + t.join().unwrap();
     }
 
-    println!("Finished.");
+    println!("Finished. Average ping: {:?}", total_ping/threadc);
 }
 
 fn main() {
-
-  let mut socket = TcpStream::connect(("localhost", 9000)).unwrap();
-  println!("Testing ping frame.");
-  test_ping(&mut socket);
+  let socket = TcpStream::connect(("localhost", 9000)).unwrap();
 
   println!("Testing TRequest frame.");
   //test_trequest(&mut socket);

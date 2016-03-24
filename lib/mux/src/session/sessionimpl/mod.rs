@@ -1,4 +1,5 @@
 extern crate sharedbuffer;
+extern crate time;
 
 use super::super::*;
 
@@ -11,7 +12,7 @@ use std::mem;
 use std::net::TcpStream;
 
 use std::io;
-use std::io::{Read, Write, BufReader, BufWriter};
+use std::io::{ErrorKind, Read, Write, BufReader, BufWriter};
 
 use std::sync::{Mutex, MutexGuard, Condvar};
 use std::time::Duration;
@@ -62,7 +63,7 @@ impl MuxSessionImpl {
     pub fn dispatch(&self, msg: &Tdispatch) -> io::Result<Rdispatch> {
         let id = try!(self.next_id());
 
-        try!(self.wrap_write(id, |id, write| {
+        try!(self.wrap_write(true, id, |id, write| {
             self.dispatch_write(id, write, msg)
         }));
 
@@ -71,15 +72,45 @@ impl MuxSessionImpl {
     }
 
     pub fn ping(&self) -> io::Result<Duration> {
-        panic!("ping not implemnted.")
+        let id = try!(self.next_id());
+        let start = time::now();
+
+        try!(self.wrap_write(true, id, |id, write| {
+            let ping = Message {
+                tag: Tag { end: true, id: id },
+                frame: MessageFrame::TPing,
+            };
+
+            encode_message(&mut *write, &ping)
+        }));
+
+        let packet = try!(self.dispatch_read(id));
+        let msg = try!(decode_message(packet));
+        match msg.frame {
+            MessageFrame::RPing => {
+                let elapsed = time::now() - start;
+                Ok(Duration::from_millis(elapsed.num_milliseconds() as u64))
+            }
+            invalid => {
+                let msg = format!("Received invalid reply for ping: {:?}", invalid);
+                Err(io::Error::new(ErrorKind::InvalidData, msg))
+            }
+        }
     }
 
     // wrap writing functions in logic to remove the channel from
     // the state on failure.
-    fn wrap_write<F>(&self, id: u32,f: F) -> io::Result<()>
+    fn wrap_write<F>(&self, flush: bool, id: u32,f: F) -> io::Result<()>
     where F: Fn(u32, &mut Write) -> io::Result<()> {
         let mut write = self.write.lock().unwrap();
-        let result = f(id, &mut *write);
+        let result = {
+            let r1 = f(id, &mut *write);
+            if flush && r1.is_ok() {
+                write.flush()
+            } else {
+                r1
+            }
+        };
 
         if result.is_err() {
             let mut read_state = self.read_state.lock().unwrap();
@@ -96,14 +127,13 @@ impl MuxSessionImpl {
         tryb!(write.write_i8(MSG_TDISPATCH));
 
         try!(Tag::encode_tag(&mut *write, &tag));
-        try!(frames::encode_tdispatch(&mut *write, msg));
-        write.flush()
+        frames::encode_tdispatch(&mut *write, msg)
     }
 
     fn dispatch_read(&self, id: u32) -> io::Result<MuxPacket> {
         match self.dispatch_read_slave(id) {
             Either::Right(result) => result,
-            Either::Left(read) => self.dispatch_read_master(id, read)
+            Either::Left(read) => self.dispatch_read_master(id, read),
         }
     }
 
@@ -208,14 +238,8 @@ impl MuxSessionImpl {
         }
     }
 
-    fn write_ping(&self, tag: Tag) -> io::Result<()> {
-        let mut write = self.write.lock().unwrap();
-        let ping = Message {
-            tag: tag.clone(),
-            frame: MessageFrame::RPing,
-        };
-
-        encode_message(&mut *write, &ping)
+    fn ping_reply(&self, tag: Tag) -> io::Result<()> {
+        panic!("Not implemented.")
     }
 
     // deals with packets other than Rdispatch
@@ -226,7 +250,7 @@ impl MuxSessionImpl {
                 self.abort_session(message);
                 Err(io::Error::new(io::ErrorKind::InvalidData, message))
             }
-            MessageFrame::TPing => self.write_ping(packet.tag),
+            MessageFrame::TPing => self.ping_reply(packet.tag),
 
             MessageFrame::RDrain => panic!("Not implemented!"),
             MessageFrame::TDrain => panic!("Not implemented!"),
