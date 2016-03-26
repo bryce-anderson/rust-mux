@@ -124,7 +124,7 @@ impl MuxSessionImpl {
         let tag = Tag { end: true, id: id };
 
         tryb!(write.write_i32::<BigEndian>(msg.frame_size() as i32 + 4));
-        tryb!(write.write_i8(MSG_TDISPATCH));
+        tryb!(write.write_i8(types::TDISPATCH));
 
         try!(Tag::encode_tag(&mut *write, &tag));
         frames::encode_tdispatch(&mut *write, msg)
@@ -239,7 +239,14 @@ impl MuxSessionImpl {
     }
 
     fn ping_reply(&self, tag: Tag) -> io::Result<()> {
-        panic!("Not implemented.")
+        let ping = Message {
+            tag: tag,
+            frame: MessageFrame::RPing,
+        };
+
+        let mut write = self.write.lock().unwrap();
+        try!(encode_message(&mut *write, &ping));
+        write.flush()
     }
 
     // deals with packets other than Rdispatch

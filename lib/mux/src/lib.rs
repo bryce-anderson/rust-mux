@@ -10,15 +10,24 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 pub type Contexts = Vec<(Vec<u8>, Vec<u8>)>;
 
-pub const MSG_TDISPATCH: i8 = 2;
-pub const MSG_RDISPATCH: i8 = -2;
-pub const MSG_TINIT: i8 = 68;
-pub const MSG_RINIT: i8 = -68;
-pub const MSG_TDRAIN: i8 = 64;
-pub const MSG_RDRAIN: i8 = -64;
-pub const MSG_TPING: i8 = 65;
-pub const MSG_RPING: i8 = -65;
-pub const MSG_RERR: i8 = -128;
+pub mod types {
+    pub const TREQ: i8 = 1;
+    pub const RREQ: i8 = -1;
+
+    pub const TDISPATCH: i8 = 2;
+    pub const RDISPATCH: i8 = -2;
+
+    pub const TINIT: i8 = 68;
+    pub const RINIT: i8 = -68;
+
+    pub const TDRAIN: i8 = 64;
+    pub const RDRAIN: i8 = -64;
+
+    pub const TPING: i8 = 65;
+    pub const RPING: i8 = -65;
+
+    pub const RERR: i8 = -128;
+}
 
 // extract a value from the byteorder::Result
 macro_rules! tryb {
@@ -192,15 +201,15 @@ impl MessageFrame {
 
     pub fn frame_id(&self) -> i8 {
         match self {
-            &MessageFrame::Tdispatch(_) => MSG_TDISPATCH,
-            &MessageFrame::Rdispatch(_) => MSG_RDISPATCH,
-            &MessageFrame::TInit(_) => MSG_TINIT,
-            &MessageFrame::RInit(_) => MSG_RINIT,
-            &MessageFrame::TDrain => MSG_TDRAIN,
-            &MessageFrame::RDrain => MSG_RDRAIN,
-            &MessageFrame::TPing => MSG_TPING,
-            &MessageFrame::RPing => MSG_RPING,
-            &MessageFrame::RErr(_) => MSG_RERR,
+            &MessageFrame::Tdispatch(_) => types::TDISPATCH,
+            &MessageFrame::Rdispatch(_) => types::RDISPATCH,
+            &MessageFrame::TInit(_) => types::TINIT,
+            &MessageFrame::RInit(_) => types::RINIT,
+            &MessageFrame::TDrain => types::TDRAIN,
+            &MessageFrame::RDrain => types::RDRAIN,
+            &MessageFrame::TPing => types::TPING,
+            &MessageFrame::RPing => types::RPING,
+            &MessageFrame::RErr(_) => types::RERR,
         }
     }
 }
