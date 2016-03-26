@@ -75,13 +75,13 @@ pub struct Message {
 pub enum MessageFrame {
     Tdispatch(Tdispatch),
     Rdispatch(Rdispatch),
-    TInit(Init),
-    RInit(Init),
-    TDrain,
-    RDrain,
-    TPing,
-    RPing,
-    RErr(String),
+    Tinit(Init),
+    Rinit(Init),
+    Tdrain,
+    Rdrain,
+    Tping,
+    Rping,
+    Rerr(String),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -189,13 +189,13 @@ impl MessageFrame {
         match self {
             &MessageFrame::Tdispatch(ref f) => f.frame_size(),
             &MessageFrame::Rdispatch(ref f) => f.frame_size(),
-            &MessageFrame::TInit(ref f) => f.frame_size(),
-            &MessageFrame::RInit(ref f) => f.frame_size(),
-            &MessageFrame::TDrain => 0,
-            &MessageFrame::RDrain => 0,
-            &MessageFrame::TPing => 0,
-            &MessageFrame::RPing => 0,
-            &MessageFrame::RErr(ref msg) => msg.as_bytes().len(),
+            &MessageFrame::Tinit(ref f) => f.frame_size(),
+            &MessageFrame::Rinit(ref f) => f.frame_size(),
+            &MessageFrame::Tdrain => 0,
+            &MessageFrame::Rdrain => 0,
+            &MessageFrame::Tping => 0,
+            &MessageFrame::Rping => 0,
+            &MessageFrame::Rerr(ref msg) => msg.as_bytes().len(),
         }
     }
 
@@ -203,13 +203,13 @@ impl MessageFrame {
         match self {
             &MessageFrame::Tdispatch(_) => types::TDISPATCH,
             &MessageFrame::Rdispatch(_) => types::RDISPATCH,
-            &MessageFrame::TInit(_) => types::TINIT,
-            &MessageFrame::RInit(_) => types::RINIT,
-            &MessageFrame::TDrain => types::TDRAIN,
-            &MessageFrame::RDrain => types::RDRAIN,
-            &MessageFrame::TPing => types::TPING,
-            &MessageFrame::RPing => types::RPING,
-            &MessageFrame::RErr(_) => types::RERR,
+            &MessageFrame::Tinit(_) => types::TINIT,
+            &MessageFrame::Rinit(_) => types::RINIT,
+            &MessageFrame::Tdrain => types::TDRAIN,
+            &MessageFrame::Rdrain => types::RDRAIN,
+            &MessageFrame::Tping => types::TPING,
+            &MessageFrame::Rping => types::RPING,
+            &MessageFrame::Rerr(_) => types::RERR,
         }
     }
 }
@@ -284,14 +284,14 @@ fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
     match frame {
         &MessageFrame::Tdispatch(ref f) => frames::encode_tdispatch(buffer, f),
         &MessageFrame::Rdispatch(ref f) => frames::encode_rdispatch(buffer, f),
-        &MessageFrame::TInit(ref f) => frames::encode_init(buffer, f),
-        &MessageFrame::RInit(ref f) => frames::encode_init(buffer, f),
+        &MessageFrame::Tinit(ref f) => frames::encode_init(buffer, f),
+        &MessageFrame::Rinit(ref f) => frames::encode_init(buffer, f),
         // the following are empty messages
-        &MessageFrame::TPing => Ok(()),
-        &MessageFrame::RPing => Ok(()),
-        &MessageFrame::TDrain => Ok(()),
-        &MessageFrame::RDrain => Ok(()),
-        &MessageFrame::RErr(ref msg) => {
+        &MessageFrame::Tping => Ok(()),
+        &MessageFrame::Rping => Ok(()),
+        &MessageFrame::Tdrain => Ok(()),
+        &MessageFrame::Rdrain => Ok(()),
+        &MessageFrame::Rerr(ref msg) => {
             try!(buffer.write_all(msg.as_bytes()));
             Ok(())
         }
@@ -302,13 +302,13 @@ pub fn decode_frame(id: i8, buffer: SharedReadBuffer) -> io::Result<MessageFrame
     Ok(match id {
         2 => MessageFrame::Tdispatch(try!(frames::decode_tdispatch(buffer))),
         -2 => MessageFrame::Rdispatch(try!(frames::decode_rdispatch(buffer))),
-        68 => MessageFrame::TInit(try!(frames::decode_init(buffer))),
-        -68 => MessageFrame::RInit(try!(frames::decode_init(buffer))),
-        64 => MessageFrame::TDrain,
-        -64 => MessageFrame::RDrain,
-        65 => MessageFrame::TPing,
-        -65 => MessageFrame::RPing,
-        -128 => MessageFrame::RErr(try!(frames::decode_rerr(buffer))),
+        68 => MessageFrame::Tinit(try!(frames::decode_init(buffer))),
+        -68 => MessageFrame::Rinit(try!(frames::decode_init(buffer))),
+        64 => MessageFrame::Tdrain,
+        -64 => MessageFrame::Rdrain,
+        65 => MessageFrame::Tping,
+        -65 => MessageFrame::Rping,
+        -128 => MessageFrame::Rerr(try!(frames::decode_rerr(buffer))),
         other => {
             return Err(
                 io::Error::new(io::ErrorKind::InvalidInput,

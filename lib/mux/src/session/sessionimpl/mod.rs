@@ -39,6 +39,7 @@ pub struct MuxSessionImpl {
     write: Mutex<Box<Write>>,
 }
 
+// Really only used in one place...
 enum Either<L,R> {
     Left(L),
     Right(R),
@@ -68,7 +69,23 @@ impl MuxSessionImpl {
         }));
 
         let packet = try!(self.dispatch_read(id));
-        frames::decode_rdispatch(packet.buffer)
+        // deals with packets other than Rdispatch
+        match try!(decode_frame(packet.tpe, packet.buffer)) {
+            MessageFrame::Rdispatch(d) => Ok(d),
+            MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
+
+            // the rest of these are unexpected messages
+            MessageFrame::Rping => self.abort_session("Unexpected Rping frame"),
+            MessageFrame::Tping => self.abort_session("Unexpected Tping frame"),
+
+            MessageFrame::Rdrain => panic!("Not implemented!"),
+            MessageFrame::Tdrain => panic!("Not implemented!"),
+
+            MessageFrame::Rinit(_) => panic!("Not implemented in finagle!"),
+            MessageFrame::Tinit(_) => panic!("Not implemented in finagle!"),
+
+            MessageFrame::Tdispatch(_) => self.abort_session("Unexpected Tdispatch frame"),
+        }
     }
 
     pub fn ping(&self) -> io::Result<Duration> {
@@ -78,7 +95,7 @@ impl MuxSessionImpl {
         try!(self.wrap_write(true, id, |id, write| {
             let ping = Message {
                 tag: Tag { end: true, id: id },
-                frame: MessageFrame::TPing,
+                frame: MessageFrame::Tping,
             };
 
             encode_message(&mut *write, &ping)
@@ -87,12 +104,12 @@ impl MuxSessionImpl {
         let packet = try!(self.dispatch_read(id));
         let msg = try!(decode_message(packet));
         match msg.frame {
-            MessageFrame::RPing => {
+            MessageFrame::Rping => {
                 let elapsed = time::now() - start;
                 Ok(Duration::from_millis(elapsed.num_milliseconds() as u64))
             }
             invalid => {
-                let msg = format!("Received invalid reply for ping: {:?}", invalid);
+                let msg = format!("Received invalid reply for Ping: {:?}", invalid);
                 Err(io::Error::new(ErrorKind::InvalidData, msg))
             }
         }
@@ -241,7 +258,7 @@ impl MuxSessionImpl {
     fn ping_reply(&self, tag: Tag) -> io::Result<()> {
         let ping = Message {
             tag: tag,
-            frame: MessageFrame::RPing,
+            frame: MessageFrame::Rping,
         };
 
         let mut write = self.write.lock().unwrap();
@@ -249,32 +266,9 @@ impl MuxSessionImpl {
         write.flush()
     }
 
-    // deals with packets other than Rdispatch
-    fn handle_packet(&self, packet: MuxPacket) -> io::Result<()> {
-        match try!(decode_frame(packet.tpe, packet.buffer)) {
-            MessageFrame::RPing => {
-                let message = "Unexpected ping reply";
-                self.abort_session(message);
-                Err(io::Error::new(io::ErrorKind::InvalidData, message))
-            }
-            MessageFrame::TPing => self.ping_reply(packet.tag),
-
-            MessageFrame::RDrain => panic!("Not implemented!"),
-            MessageFrame::TDrain => panic!("Not implemented!"),
-
-            MessageFrame::RInit(_) => panic!("Not implemented!"),
-            MessageFrame::TInit(_) => panic!("Not implemented!"),
-
-            MessageFrame::Tdispatch(_) => panic!("Not implemented!"),
-            MessageFrame::Rdispatch(_) => {
-                panic!("Not implemented!")
-            }
-            MessageFrame::RErr(_) => panic!("Not implemented!"),
-        }
-    }
-
-    fn abort_session(&self, msg: &str) {
-        panic!("abort_session not implemented")
+    fn abort_session<T>(&self, msg: &str) -> io::Result<T> {
+        panic!("abort_session not implemented");
+        Err(io::Error::new(io::ErrorKind::InvalidData, msg))
     }
 
     fn next_id(&self) -> io::Result<u32> {
