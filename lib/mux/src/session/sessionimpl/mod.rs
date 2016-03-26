@@ -14,9 +14,8 @@ use std::net::TcpStream;
 use std::io;
 use std::io::{ErrorKind, Read, Write, BufReader, BufWriter};
 
-use std::sync::{Mutex, MutexGuard, Condvar};
+use std::sync::{Mutex, Condvar};
 use std::time::Duration;
-use std::thread;
 
 // pub const DEFAULT_CHUNK_SIZE: usize = 64*1024; // 64 KB not used yet.
 const MAX_TAG: usize = (1 << 23) - 1;
@@ -70,21 +69,29 @@ impl MuxSessionImpl {
 
         let packet = try!(self.dispatch_read(id));
         // deals with packets other than Rdispatch
-        match try!(decode_frame(packet.tpe, packet.buffer)) {
-            MessageFrame::Rdispatch(d) => Ok(d),
-            MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
+        match decode_frame(packet.tpe, packet.buffer) {
+            Ok(msg) => match msg {
+                MessageFrame::Rdispatch(d) => Ok(d),
+                MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
 
-            // the rest of these are unexpected messages
-            MessageFrame::Rping => self.abort_session("Unexpected Rping frame"),
-            MessageFrame::Tping => self.abort_session("Unexpected Tping frame"),
+                // the rest of these are unexpected messages
+                MessageFrame::Rping => self.abort_session("Unexpected Rping frame"),
+                MessageFrame::Tping => self.abort_session("Unexpected Tping frame"),
 
-            MessageFrame::Rdrain => panic!("Not implemented!"),
-            MessageFrame::Tdrain => panic!("Not implemented!"),
+                MessageFrame::Rdrain => panic!("Not implemented!"),
+                MessageFrame::Tdrain => panic!("Not implemented!"),
 
-            MessageFrame::Rinit(_) => panic!("Not implemented in finagle!"),
-            MessageFrame::Tinit(_) => panic!("Not implemented in finagle!"),
+                MessageFrame::Rinit(_) => panic!("Not implemented in finagle!"),
+                MessageFrame::Tinit(_) => panic!("Not implemented in finagle!"),
 
-            MessageFrame::Tdispatch(_) => self.abort_session("Unexpected Tdispatch frame"),
+                MessageFrame::Tdispatch(_) => self.abort_session("Unexpected Tdispatch frame"),
+            },
+
+            Err(cause) => {
+                 // Ignore the result here, yield the origional error.
+                let _: io::Result<()> = self.abort_session("Failed to decode packet");
+                Err(cause)
+            }
         }
     }
 
@@ -212,7 +219,7 @@ impl MuxSessionImpl {
             let result = match packet {
                 Err(err) => {
                     // Alert everyone...
-                    for (k,v) in read_state.channel_states.iter_mut() {
+                    for (_,v) in read_state.channel_states.iter_mut() {
                         let mut next = ReadState::Poisoned(copy_error(&err));
                         mem::swap(&mut next, v);
                         if let ReadState::Waiting(cv) = next {
@@ -225,7 +232,7 @@ impl MuxSessionImpl {
                 Ok(packet) => {
                      if packet.tag.id == id {
                         // our packet. Need to elect a new leader
-                        for (k,v) in read_state.channel_states.iter() {
+                        for (_,v) in read_state.channel_states.iter() {
                             if let &ReadState::Waiting(cv) = v {
                                     unsafe { (*cv).notify_one(); }
                                     break;
@@ -242,7 +249,7 @@ impl MuxSessionImpl {
                                 unsafe { (*cv).notify_one(); }
                             }
                         } else {
-                            println!("Warning: packet for unopen channel: {}. Dropping.", packet.tag.id);
+                            try!(self.unhandled_packet(packet));
                         }
                         continue;
                     }
@@ -253,6 +260,21 @@ impl MuxSessionImpl {
             read_state.read = Some(read);
             return result;
         }
+    }
+
+    fn unhandled_packet(&self, packet: MuxPacket) -> io::Result<()> {
+        match packet.tpe {
+            types::TPING => self.ping_reply(packet.tag),
+            types::TDRAIN => self.drain(),
+            tpe => {
+                let msg = format!("Received unhandled packet with type {}", tpe);
+                self.abort_session(&msg)
+            }
+        }
+    }
+
+    fn drain(&self) -> io::Result<()> {
+        panic!("Not implemented!")
     }
 
     fn ping_reply(&self, tag: Tag) -> io::Result<()> {
@@ -266,6 +288,7 @@ impl MuxSessionImpl {
         write.flush()
     }
 
+    // Abort the session, closing down and returning a failed result
     fn abort_session<T>(&self, msg: &str) -> io::Result<T> {
         panic!("abort_session not implemented");
         Err(io::Error::new(io::ErrorKind::InvalidData, msg))
