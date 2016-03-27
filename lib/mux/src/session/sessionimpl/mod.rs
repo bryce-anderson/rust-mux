@@ -66,37 +66,22 @@ impl MuxSessionImpl {
             self.dispatch_write(id, write, msg)
         }));
 
-        loop {
-            let packet = try!(self.dispatch_read(id));
-            // deals with packets other than Rdispatch
-            return match decode_frame(packet.tpe, packet.buffer) {
-                Ok(msg) => match msg {
-                    MessageFrame::Rdispatch(d) => Ok(d),
-                    MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
+        let packet = try!(self.dispatch_read(id));
+        // only addresses packets intended for this channel
+        match try!(self.s_decode_frame(packet)) {
+            MessageFrame::Rdispatch(d) => Ok(d),
+            MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
 
-                    MessageFrame::Tlease(_) => {
-                        println!("Tlease recieved but not implemented. Discarding.");
-                        continue;
-                    }
+            MessageFrame::Tlease(_) => {
+                let msg = format!("Protocol error: Invalid channel ({}) for Tlease.", id);
+                self.abort_session(&msg)
+            }
 
-                    // the rest of these are unexpected messages
-                    MessageFrame::Rping => self.abort_session("Unexpected Rping frame"),
-                    MessageFrame::Tping => self.abort_session("Unexpected Tping frame"),
-
-                    MessageFrame::Rdrain => panic!("Not implemented!"),
-                    MessageFrame::Tdrain => panic!("Not implemented!"),
-
-                    MessageFrame::Rinit(_) => panic!("Not implemented in finagle!"),
-                    MessageFrame::Tinit(_) => panic!("Not implemented in finagle!"),
-
-                    MessageFrame::Tdispatch(_) => self.abort_session("Unexpected Tdispatch frame"),
-                },
-
-                Err(cause) => {
-                     // Ignore the result here, yield the origional error.
-                    let _: io::Result<()> = self.abort_session("Failed to decode packet");
-                    Err(cause)
-                }
+            // the rest of these are unexpected messages at this point
+            other => {
+                // Tdispatch, Pings, Drains, and Inits
+                let msg = format!("Unexpected frame: {:?}", &other);
+                self.abort_session(&msg)
             }
         }
     }
@@ -160,6 +145,8 @@ impl MuxSessionImpl {
         frames::encode_tdispatch(&mut *write, msg)
     }
 
+    // dispatch_read will clean up the channel state after receiving its message.
+    // I don't like that pattern: the channel state should be handled at one point.
     fn dispatch_read(&self, id: u32) -> io::Result<MuxPacket> {
         match self.dispatch_read_slave(id) {
             Either::Right(result) => result,
@@ -225,7 +212,7 @@ impl MuxSessionImpl {
 
             let result = match packet {
                 Err(err) => {
-                    // Alert everyone...
+                    // We have a malformed packet or connection error. Alert everyone.
                     for (_,v) in read_state.channel_states.iter_mut() {
                         let mut next = ReadState::Poisoned(copy_error(&err));
                         mem::swap(&mut next, v);
@@ -269,12 +256,36 @@ impl MuxSessionImpl {
         }
     }
 
+    #[inline]
+    fn s_decode_frame(&self, packet: MuxPacket) -> io::Result<MessageFrame> {
+        let frame = decode_frame(packet.tpe, packet.buffer);
+
+        if let &Err(ref err) = &frame {
+            let _ = self.abort_session::<()>(err.description());
+        }
+
+        frame
+    }
+
     fn unhandled_packet(&self, packet: MuxPacket) -> io::Result<()> {
-        match packet.tpe {
-            types::TPING => self.ping_reply(packet.tag),
-            types::TDRAIN => self.drain(),
-            tpe => {
-                let msg = format!("Received unhandled packet with type {}", tpe);
+        let id = packet.tag.id;
+
+        match try!(self.s_decode_frame(packet)) {
+            MessageFrame::Tlease(_) if id == 0 => {
+                println!("Unhandled Tlease frame.");
+                Ok(())
+            }
+
+            MessageFrame::Tping => self.ping_reply(id),
+
+            MessageFrame::Tdrain => self.drain(),
+            MessageFrame::Rdrain => self.abort_session("Unexpected Rdrain"),
+
+            MessageFrame::Rinit(_) => self.abort_session("Unexpected Rinit"),
+            MessageFrame::Tinit(_) => self.abort_session("Unexpected Tinit"),
+
+            frame => {
+                let msg = format!("Unexpected frame: {:?}", &frame);
                 self.abort_session(&msg)
             }
         }
@@ -284,9 +295,9 @@ impl MuxSessionImpl {
         panic!("Not implemented!")
     }
 
-    fn ping_reply(&self, tag: Tag) -> io::Result<()> {
+    fn ping_reply(&self, id: u32) -> io::Result<()> {
         let ping = Message {
-            tag: tag,
+            tag: Tag { end: true, id: id },
             frame: MessageFrame::Rping,
         };
 

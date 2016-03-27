@@ -96,8 +96,7 @@ pub fn encode_string<W: Write + ?Sized>(buffer: &mut W, s: &str) -> io::Result<(
     let bytes = s.as_bytes();
     assert!(bytes.len() <= i16::MAX as usize);
     tryb!(buffer.write_i16::<BigEndian>(bytes.len() as i16));
-    try!(buffer.write_all(bytes));
-    Ok(())
+    buffer.write_all(bytes)
 }
 
 pub fn decode_rerr(mut buffer: SharedReadBuffer) -> io::Result<String> {
@@ -144,9 +143,7 @@ pub fn decode_init(mut buffer: SharedReadBuffer) -> io::Result<Init> {
 pub fn encode_rdispatch(buffer: &mut Write, msg: &Rdispatch) -> io::Result<()> {
     tryb!(buffer.write_i8(msg.status));
     try!(encode_contexts(buffer, &msg.contexts));
-    try!(buffer.write_all(&msg.body));
-
-    Ok(())
+    buffer.write_all(&msg.body)
 }
 
 pub fn decode_rdispatch(mut buffer: SharedReadBuffer) -> io::Result<Rdispatch> {
@@ -181,7 +178,5 @@ pub fn encode_tdispatch(buffer: &mut Write, msg: &Tdispatch) -> io::Result<()> {
     try!(encode_contexts(buffer, &msg.contexts));
     try!(encode_string(buffer, &msg.dest));
     try!(encode_dtable(buffer, &msg.dtable));
-    try!(buffer.write_all(&msg.body));
-
-    Ok(())
+    buffer.write_all(&msg.body)
 }

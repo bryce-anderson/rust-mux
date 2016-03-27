@@ -25,7 +25,7 @@ fn test_session(socket: TcpStream) {
 
         thread::spawn(move || {
             let mut ping_time = Duration::new(0, 0);
-            let iters = 1_000_000;
+            let iters = 10_000;
             for _ in 0..iters {
                 if rand::random::<u8>() > 64 {
                     let v = format!("Hello, world: {}", id).into_bytes();
