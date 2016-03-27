@@ -6,6 +6,8 @@ use sharedbuffer::SharedReadBuffer;
 use std::io;
 use std::io::{Read, Write};
 
+use std::time::Duration;
+
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 pub type Contexts = Vec<(Vec<u8>, Vec<u8>)>;
@@ -25,6 +27,9 @@ pub mod types {
 
     pub const TPING: i8 = 65;
     pub const RPING: i8 = -65;
+
+    pub const TDISCARDED: i8 = 66;
+    pub const TLEASE: i8 = 67;
 
     pub const RERR: i8 = -128;
 }
@@ -82,6 +87,8 @@ pub enum MessageFrame {
     Tping,
     Rping,
     Rerr(String),
+    Tlease(Duration),   // Notification of a lease of resources for the specified duration
+    // Tdiscarded(String), // Sent by a client to alert the server of a discarded message
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -195,6 +202,7 @@ impl MessageFrame {
             &MessageFrame::Rdrain => 0,
             &MessageFrame::Tping => 0,
             &MessageFrame::Rping => 0,
+            &MessageFrame::Tlease(_) => 9,
             &MessageFrame::Rerr(ref msg) => msg.as_bytes().len(),
         }
     }
@@ -209,6 +217,7 @@ impl MessageFrame {
             &MessageFrame::Rdrain => types::RDRAIN,
             &MessageFrame::Tping => types::TPING,
             &MessageFrame::Rping => types::RPING,
+            &MessageFrame::Tlease(_) => types::TLEASE,
             &MessageFrame::Rerr(_) => types::RERR,
         }
     }
@@ -291,24 +300,35 @@ fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
         &MessageFrame::Rping => Ok(()),
         &MessageFrame::Tdrain => Ok(()),
         &MessageFrame::Rdrain => Ok(()),
-        &MessageFrame::Rerr(ref msg) => {
-            try!(buffer.write_all(msg.as_bytes()));
+        &MessageFrame::Tlease(ref d) => {
+            let millis = d.as_secs()*1000 + (((d.subsec_nanos() as f64)/1e6) as u64);
+            tryb!(buffer.write_u8(0));
+            tryb!(buffer.write_u64::<BigEndian>(millis));
             Ok(())
+        }
+        &MessageFrame::Rerr(ref msg) => {
+            buffer.write_all(msg.as_bytes())
         }
     }
 }
 
 pub fn decode_frame(id: i8, buffer: SharedReadBuffer) -> io::Result<MessageFrame> {
     Ok(match id {
-        2 => MessageFrame::Tdispatch(try!(frames::decode_tdispatch(buffer))),
-        -2 => MessageFrame::Rdispatch(try!(frames::decode_rdispatch(buffer))),
-        68 => MessageFrame::Tinit(try!(frames::decode_init(buffer))),
-        -68 => MessageFrame::Rinit(try!(frames::decode_init(buffer))),
-        64 => MessageFrame::Tdrain,
-        -64 => MessageFrame::Rdrain,
-        65 => MessageFrame::Tping,
-        -65 => MessageFrame::Rping,
-        -128 => MessageFrame::Rerr(try!(frames::decode_rerr(buffer))),
+        types::TDISPATCH => MessageFrame::Tdispatch(try!(frames::decode_tdispatch(buffer))),
+        types::RDISPATCH => MessageFrame::Rdispatch(try!(frames::decode_rdispatch(buffer))),
+        types::TINIT => MessageFrame::Tinit(try!(frames::decode_init(buffer))),
+        types::RINIT => MessageFrame::Rinit(try!(frames::decode_init(buffer))),
+        types::TDRAIN => MessageFrame::Tdrain,
+        types::RDRAIN => MessageFrame::Rdrain,
+        types::TPING => MessageFrame::Tping,
+        types::RPING => MessageFrame::Rping,
+        types::TLEASE => {
+            let mut buffer = buffer;
+            let _ = try!(buffer.read_u8());
+            let ticks = try!(buffer.read_u64::<BigEndian>());
+            MessageFrame::Tlease(Duration::from_millis(ticks))
+        }
+        types::RERR => MessageFrame::Rerr(try!(frames::decode_rerr(buffer))),
         other => {
             return Err(
                 io::Error::new(io::ErrorKind::InvalidInput,

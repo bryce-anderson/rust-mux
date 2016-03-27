@@ -17,7 +17,6 @@ use std::io::{ErrorKind, Read, Write, BufReader, BufWriter};
 use std::sync::{Mutex, Condvar};
 use std::time::Duration;
 
-// pub const DEFAULT_CHUNK_SIZE: usize = 64*1024; // 64 KB not used yet.
 const MAX_TAG: usize = (1 << 23) - 1;
 
 // need to detail how the state can be 'poisoned' by a protocol error
@@ -27,7 +26,7 @@ struct SessionReadState {
 }
 
 enum ReadState {
-    Packet(Option<MuxPacket>),
+    Packet(Option<MuxPacket>), // a queue for later version of the protocol
     Waiting(*const Condvar),
     Poisoned(io::Error),
 }
@@ -67,30 +66,37 @@ impl MuxSessionImpl {
             self.dispatch_write(id, write, msg)
         }));
 
-        let packet = try!(self.dispatch_read(id));
-        // deals with packets other than Rdispatch
-        match decode_frame(packet.tpe, packet.buffer) {
-            Ok(msg) => match msg {
-                MessageFrame::Rdispatch(d) => Ok(d),
-                MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
+        loop {
+            let packet = try!(self.dispatch_read(id));
+            // deals with packets other than Rdispatch
+            return match decode_frame(packet.tpe, packet.buffer) {
+                Ok(msg) => match msg {
+                    MessageFrame::Rdispatch(d) => Ok(d),
+                    MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
 
-                // the rest of these are unexpected messages
-                MessageFrame::Rping => self.abort_session("Unexpected Rping frame"),
-                MessageFrame::Tping => self.abort_session("Unexpected Tping frame"),
+                    MessageFrame::Tlease(_) => {
+                        println!("Tlease recieved but not implemented. Discarding.");
+                        continue;
+                    }
 
-                MessageFrame::Rdrain => panic!("Not implemented!"),
-                MessageFrame::Tdrain => panic!("Not implemented!"),
+                    // the rest of these are unexpected messages
+                    MessageFrame::Rping => self.abort_session("Unexpected Rping frame"),
+                    MessageFrame::Tping => self.abort_session("Unexpected Tping frame"),
 
-                MessageFrame::Rinit(_) => panic!("Not implemented in finagle!"),
-                MessageFrame::Tinit(_) => panic!("Not implemented in finagle!"),
+                    MessageFrame::Rdrain => panic!("Not implemented!"),
+                    MessageFrame::Tdrain => panic!("Not implemented!"),
 
-                MessageFrame::Tdispatch(_) => self.abort_session("Unexpected Tdispatch frame"),
-            },
+                    MessageFrame::Rinit(_) => panic!("Not implemented in finagle!"),
+                    MessageFrame::Tinit(_) => panic!("Not implemented in finagle!"),
 
-            Err(cause) => {
-                 // Ignore the result here, yield the origional error.
-                let _: io::Result<()> = self.abort_session("Failed to decode packet");
-                Err(cause)
+                    MessageFrame::Tdispatch(_) => self.abort_session("Unexpected Tdispatch frame"),
+                },
+
+                Err(cause) => {
+                     // Ignore the result here, yield the origional error.
+                    let _: io::Result<()> = self.abort_session("Failed to decode packet");
+                    Err(cause)
+                }
             }
         }
     }
@@ -201,6 +207,7 @@ impl MuxSessionImpl {
                 None => {
                     // wait for someone to wake us up
                     read_state = cv.wait(read_state).unwrap();
+
                 }
             }
         }
