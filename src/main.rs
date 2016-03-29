@@ -1,12 +1,9 @@
-extern crate sharedbuffer;
 extern crate mux;
 
 extern crate byteorder;
 extern crate rand;
 
 use mux::session::*;
-
-use sharedbuffer::SharedReadBuffer;
 
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -28,8 +25,7 @@ fn test_session(socket: TcpStream) {
             let iters = 10_000;
             for _ in 0..iters {
                 if rand::random::<u8>() > 64 {
-                    let v = format!("Hello, world: {}", id).into_bytes();
-                    let b = SharedReadBuffer::new(v);
+                    let b = format!("Hello, world: {}", id).into_bytes();
                     let frame = mux::Tdispatch::basic_("/foo".to_string(), b);
 
                     let resp = session.dispatch(&frame).unwrap();

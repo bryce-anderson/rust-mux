@@ -1,10 +1,7 @@
 extern crate byteorder;
-extern crate sharedbuffer;
-
-use sharedbuffer::SharedReadBuffer;
 
 use std::io;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 
 use std::time::Duration;
 
@@ -96,19 +93,19 @@ pub struct Tdispatch {
     pub contexts: Contexts,
     pub dest: String,
     pub dtable: DTable,
-    pub body: SharedReadBuffer,
+    pub body: Vec<u8>,
 }
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Rdispatch {
     pub status: i8,
     pub contexts: Contexts,
-    pub body: SharedReadBuffer,
+    pub body: Vec<u8>,
 }
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Init {
-    pub version: i16,
+    pub version: u16,
     pub headers: Contexts,
 }
 
@@ -255,11 +252,11 @@ impl Tdispatch {
                        dtable_size(&self.dtable);
 
         size += self.dest.as_bytes().len();
-        size += self.body.remaining();
+        size += self.body.len();
         size
     }
 
-    pub fn basic_(dest: String, body: SharedReadBuffer) -> Tdispatch {
+    pub fn basic_(dest: String, body: Vec<u8>) -> Tdispatch {
         Tdispatch {
             contexts: Vec::new(),
             dest: dest,
@@ -268,14 +265,14 @@ impl Tdispatch {
         }
     }
 
-    pub fn basic(dest: String, body: SharedReadBuffer) -> MessageFrame {
+    pub fn basic(dest: String, body: Vec<u8>) -> MessageFrame {
         MessageFrame::Tdispatch(Tdispatch::basic_(dest, body))
     }
 }
 
 impl Rdispatch {
     fn frame_size(&self) -> usize {
-        1 + context_size(&self.contexts) + self.body.remaining()
+        1 + context_size(&self.contexts) + self.body.len()
     }
 }
 
@@ -312,27 +309,28 @@ fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
     }
 }
 
-pub fn decode_frame(id: i8, buffer: SharedReadBuffer) -> io::Result<MessageFrame> {
-    Ok(match id {
-        types::TDISPATCH => MessageFrame::Tdispatch(try!(frames::decode_tdispatch(buffer))),
-        types::RDISPATCH => MessageFrame::Rdispatch(try!(frames::decode_rdispatch(buffer))),
-        types::TINIT => MessageFrame::Tinit(try!(frames::decode_init(buffer))),
-        types::RINIT => MessageFrame::Rinit(try!(frames::decode_init(buffer))),
+// Decodes `data` into a frame if type `tpe`
+pub fn decode_frame(tpe: i8, data: &[u8]) -> io::Result<MessageFrame> {
+    Ok(match tpe {
+        types::TDISPATCH => MessageFrame::Tdispatch(try!(frames::decode_tdispatch(data))),
+        types::RDISPATCH => MessageFrame::Rdispatch(try!(frames::decode_rdispatch(data))),
+        types::TINIT => MessageFrame::Tinit(try!(frames::decode_init(data))),
+        types::RINIT => MessageFrame::Rinit(try!(frames::decode_init(data))),
         types::TDRAIN => MessageFrame::Tdrain,
         types::RDRAIN => MessageFrame::Rdrain,
         types::TPING => MessageFrame::Tping,
         types::RPING => MessageFrame::Rping,
         types::TLEASE => {
-            let mut buffer = buffer;
+            let mut buffer = Cursor::new(data);
             let _ = try!(buffer.read_u8());
             let ticks = try!(buffer.read_u64::<BigEndian>());
             MessageFrame::Tlease(Duration::from_millis(ticks))
         }
-        types::RERR => MessageFrame::Rerr(try!(frames::decode_rerr(buffer))),
+        types::RERR => MessageFrame::Rerr(try!(frames::decode_rerr(data))),
         other => {
             return Err(
                 io::Error::new(io::ErrorKind::InvalidInput,
-                    format!("Invalid frame id: {}", other))
+                    format!("Invalid frame type: {}", other))
                 );
         }
     })
@@ -365,14 +363,14 @@ pub fn read_frame(input: &mut Read) -> io::Result<MuxPacket> {
 // This is a synchronous function that will read a whole message from the `Read`
 pub fn read_message(input: &mut Read) -> io::Result<Message> {
     let packet = try!(read_frame(input));
-    decode_message(packet)
+    decode_message(&packet)
 }
 
 // expects a SharedReadBuffer of the whole mux frame
-pub fn decode_message(input: MuxPacket) -> io::Result<Message> {
-    let frame = try!(decode_frame(input.tpe, SharedReadBuffer::new(input.buffer)));
+pub fn decode_message(input: &MuxPacket) -> io::Result<Message> {
+    let frame = try!(decode_frame(input.tpe, &input.buffer));
     Ok(Message {
-        tag: input.tag,
+        tag: input.tag.clone(),
         frame: frame,
     })
 }

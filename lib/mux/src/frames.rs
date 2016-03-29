@@ -1,17 +1,13 @@
-
-
-extern crate sharedbuffer;
 extern crate byteorder;
 
 use byteorder::{ReadBytesExt, BigEndian, WriteBytesExt};
 
 use std::io;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Cursor, ErrorKind, Read, Write};
 
-use sharedbuffer::SharedReadBuffer;
 use super::*;
 
-use std::{i16, u16};
+use std::u16;
 
 pub fn encode_contexts<W: Write + ?Sized>(buffer: &mut W, contexts: &Contexts) -> io::Result<()> {
     // TODO: these shouldn't be asserts.
@@ -65,7 +61,7 @@ pub fn decode_dtable<R: Read + ?Sized>(buffer: &mut R) -> io::Result<DTable> {
 }
 
 pub fn encode_dtable<R: Write + ?Sized>(buffer: &mut R, table: &DTable) -> io::Result<()> {
-    tryb!(buffer.write_i16::<BigEndian>(table.entries.len() as i16));
+    tryb!(buffer.write_u16::<BigEndian>(table.entries.len() as u16));
 
     for &(ref k, ref v) in &table.entries {
         try!(encode_string(buffer, k));
@@ -82,6 +78,7 @@ fn to_string(vec: Vec<u8>) -> io::Result<String> {
 }
 
 // decode a utf8 string with length specified by a u16 prefix byte
+#[inline]
 pub fn decode_string<R: Read + ?Sized>(buffer: &mut R) -> io::Result<String> {
     let str_len = tryb!(buffer.read_u16::<BigEndian>());
     let mut s = vec![0; str_len as usize];
@@ -94,40 +91,43 @@ pub fn decode_string<R: Read + ?Sized>(buffer: &mut R) -> io::Result<String> {
 #[inline]
 pub fn encode_string<W: Write + ?Sized>(buffer: &mut W, s: &str) -> io::Result<()> {
     let bytes = s.as_bytes();
-    assert!(bytes.len() <= i16::MAX as usize);
-    tryb!(buffer.write_i16::<BigEndian>(bytes.len() as i16));
+    assert!(bytes.len() <= u16::MAX as usize);
+    tryb!(buffer.write_u16::<BigEndian>(bytes.len() as u16));
     buffer.write_all(bytes)
 }
 
-pub fn decode_rerr(mut buffer: SharedReadBuffer) -> io::Result<String> {
-    let mut data = vec![0;buffer.remaining()];
-    try!(buffer.read_exact(&mut data));
+pub fn decode_rerr<R: Read>(mut buffer: R) -> io::Result<String> {
+    let mut data = Vec::new();
+    let _ = try!(buffer.read_to_end(&mut data));
     to_string(data)
 }
 
 pub fn encode_init(buffer: &mut Write, msg: &Init) -> io::Result<()> {
-    tryb!(buffer.write_i16::<BigEndian>(msg.version));
+    tryb!(buffer.write_u16::<BigEndian>(msg.version));
 
     for &(ref k, ref v) in &msg.headers {
-        tryb!(buffer.write_i32::<BigEndian>(k.len() as i32));
+        tryb!(buffer.write_u32::<BigEndian>(k.len() as u32));
         try!(buffer.write_all(k));
-        tryb!(buffer.write_i32::<BigEndian>(v.len() as i32));
+        tryb!(buffer.write_u32::<BigEndian>(v.len() as u32));
         try!(buffer.write_all(v));
     }
 
     Ok(())
 }
 
-pub fn decode_init(mut buffer: SharedReadBuffer) -> io::Result<Init> {
-    let version = tryb!(buffer.read_i16::<BigEndian>());
+pub fn decode_init(data: &[u8]) -> io::Result<Init> {
+    let datalen = data.len() as u64;
+    let mut buffer = Cursor::new(data);
 
+    let version = tryb!(buffer.read_u16::<BigEndian>());
     let mut headers = Vec::new();
-    while buffer.remaining() > 0 {
-        let klen = tryb!(buffer.read_i32::<BigEndian>());
+
+    while buffer.position() < datalen {
+        let klen = tryb!(buffer.read_u32::<BigEndian>());
         let mut k = vec![0;klen as usize];
         try!(buffer.read_exact(&mut k));
 
-        let vlen = tryb!(buffer.read_i32::<BigEndian>());
+        let vlen = tryb!(buffer.read_u32::<BigEndian>());
         let mut v = vec![0;vlen as usize];
         try!(buffer.read_exact(&mut v));
 
@@ -146,10 +146,13 @@ pub fn encode_rdispatch(buffer: &mut Write, msg: &Rdispatch) -> io::Result<()> {
     buffer.write_all(&msg.body)
 }
 
-pub fn decode_rdispatch(mut buffer: SharedReadBuffer) -> io::Result<Rdispatch> {
+// Expects to consume the whole stream
+pub fn decode_rdispatch<R: Read>(mut buffer: R) -> io::Result<Rdispatch> {
+
     let status = tryb!(buffer.read_i8());
     let contexts = try!(decode_contexts(&mut buffer));
-    let body = buffer.consume_remaining();
+    let mut body = Vec::new();
+    let _ = try!(buffer.read_to_end(&mut body));
 
     Ok(Rdispatch {
         status: status,
@@ -158,12 +161,14 @@ pub fn decode_rdispatch(mut buffer: SharedReadBuffer) -> io::Result<Rdispatch> {
     })
 }
 
-// Expects to receive a SharedReadBuffer that consists of the entire message
-pub fn decode_tdispatch(mut buffer: SharedReadBuffer) -> io::Result<Tdispatch> {
+// Expects to consume the whole stream
+pub fn decode_tdispatch<R: Read>(mut buffer: R) -> io::Result<Tdispatch> {
     let contexts = try!(decode_contexts(&mut buffer));
     let dest = try!(decode_string(&mut buffer));
     let dtable = try!(decode_dtable(&mut buffer));
-    let body = buffer.consume_remaining();
+
+    let mut body = Vec::new();
+    let _ = try!(buffer.read_to_end(&mut body));
 
     Ok(Tdispatch {
         contexts: contexts,
