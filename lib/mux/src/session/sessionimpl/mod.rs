@@ -88,7 +88,7 @@ impl MuxSessionImpl {
 
     pub fn ping(&self) -> io::Result<Duration> {
         let id = try!(self.next_id());
-        let start = time::now();
+        let start = time::precise_time_ns();
 
         try!(self.wrap_write(true, id, |id, write| {
             let ping = Message {
@@ -103,8 +103,8 @@ impl MuxSessionImpl {
         let msg = try!(decode_message(packet));
         match msg.frame {
             MessageFrame::Rping => {
-                let elapsed = time::now() - start;
-                Ok(Duration::from_millis(elapsed.num_milliseconds() as u64))
+                let elapsed = time::precise_time_ns() - start;
+                Ok(Duration::from_millis(elapsed / 1_000_000))
             }
             invalid => {
                 let msg = format!("Received invalid reply for Ping: {:?}", invalid);
