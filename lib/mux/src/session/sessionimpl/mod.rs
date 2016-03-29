@@ -147,21 +147,18 @@ impl MuxSessionImpl {
 
         let packet = try!(self.dispatch_read(id));
         // only addresses packets intended for this channel
-        match try!(self.s_decode_frame(packet)) {
-            MessageFrame::Rdispatch(d) => Ok(d),
-            MessageFrame::Rerr(reason) => Err(io::Error::new(ErrorKind::Other, reason)),
-
-            MessageFrame::Tlease(_) => {
-                let msg = format!("Protocol error: Invalid channel ({}) for Tlease.", id);
-                self.abort_session_proto(&msg)
-            }
+        match decode_frame(packet.tpe, packet.buffer) {
+            Ok(MessageFrame::Rdispatch(d)) => Ok(d),
+            Ok(MessageFrame::Rerr(reason)) => Err(io::Error::new(ErrorKind::Other, reason)),
 
             // the rest of these are unexpected messages at this point
-            other => {
+            Ok(other) => {
                 // Tdispatch, Pings, Drains, and Inits
                 let msg = format!("Unexpected frame: {:?}", &other);
                 self.abort_session_proto(&msg)
             }
+
+            Err(err) => self.abort_session(err.kind(), err.description()),
         }
     }
 
@@ -358,17 +355,6 @@ impl MuxSessionImpl {
             read_state.read = Some(read);
             return result;
         }
-    }
-
-    #[inline]
-    fn s_decode_frame(&self, packet: MuxPacket) -> io::Result<MessageFrame> {
-        let frame = decode_frame(packet.tpe, packet.buffer);
-
-        if let &Err(ref err) = &frame {
-            let _ = self.abort_session::<()>(err.kind(), err.description());
-        }
-
-        frame
     }
 
     fn ping_reply(&self, id: u32) -> io::Result<()> {
