@@ -302,6 +302,7 @@ impl MuxSessionImpl {
                         read_state.elect_leader();
                         Ok(packet)
                     } else {
+                        // if a channel exists, let them handle it
                         if let Some(st) = read_state.channel_states.get_mut(&packet.tag.id) {
                             let mut old = ReadState::Packet(Some(packet));
                             mem::swap(&mut old, st);
@@ -318,33 +319,42 @@ impl MuxSessionImpl {
                         match decode_frame(packet.tpe, packet.buffer) {
                             Ok(MessageFrame::Tlease(_)) if id == 0 => {
                                 println!("Unhandled Tlease frame.");
+                                continue;
                             }
 
-                            Ok(MessageFrame::Tping) => try!(self.ping_reply(id)),
+                            Ok(MessageFrame::Tping) => {
+                                match self.ping_reply(id) {
+                                    Ok(_) => continue,
+                                    Err(err) => {
+                                        read_state.abort_session(err.kind(), err.description());
+                                        Err(err)
+                                    }
+                                }
+                            }
+
                             Ok(MessageFrame::Tdrain) => {
                                 read_state.drain();
+                                continue;
                             }
 
                             // All other packets are unexpected
                             Ok(frame) => {
                                 let msg = format!("Unexpected frame: {:?}", &frame);
                                 read_state.abort_session(ErrorKind::InvalidData, &msg);
-                                return Err(io::Error::new(ErrorKind::InvalidData, msg));
+                                Err(io::Error::new(ErrorKind::InvalidData, msg))
                             }
 
                             // Packet decode failure
                             Err(err) => {
                                 read_state.abort_session(err.kind(), err.description());
-                                return Err(err);
+                                Err(err)
                             }
                         }
-
-                        continue;
                     }
                 }
             };
             // cleanup code. If we get past the match, we have a result
-            let _ = read_state.release_id(id);
+            read_state.release_id(id);
             read_state.read = Some(read);
             return result;
         }
