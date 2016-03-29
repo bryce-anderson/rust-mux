@@ -7,7 +7,7 @@ use byteorder;
 use byteorder::{WriteBytesExt, BigEndian, ByteOrder};
 
 use std::collections::BTreeMap;
-use std::error::{Error};
+use std::error::Error;
 use std::mem;
 use std::net::TcpStream;
 
@@ -19,10 +19,17 @@ use std::time::Duration;
 
 const MAX_TAG: usize = (1 << 23) - 1;
 
+// Really only used in one place...
+enum Either<L,R> {
+    Left(L),
+    Right(R),
+}
+
 // need to detail how the state can be 'poisoned' by a protocol error
 struct SessionReadState {
     channel_states: BTreeMap<u32, ReadState>,
     read: Option<Box<Read>>,
+    state: SessionState,
 }
 
 enum ReadState {
@@ -37,20 +44,92 @@ pub struct MuxSessionImpl {
     write: Mutex<Box<Write>>,
 }
 
-// Really only used in one place...
-enum Either<L,R> {
-    Left(L),
-    Right(R),
+enum SessionState {
+    Dispatching,
+    Draining,
+    Closed,
+    Error(ErrorKind, String),
+}
+
+impl SessionState {
+    fn is_draining(&self) -> bool {
+        match self {
+            &SessionState::Draining => true,
+            _ => false,
+        }
+    }
+}
+
+impl SessionReadState {
+    fn new(read: Box<Read>) -> SessionReadState {
+        SessionReadState {
+            channel_states: BTreeMap::new(),
+            read: Some(read),
+            state: SessionState::Dispatching,
+        }
+    }
+
+    fn next_id(&mut self) -> io::Result<u32> {
+        try!(self.check_ok());
+
+        for i in 2..MAX_TAG {
+            let i = i as u32;
+            if !self.channel_states.contains_key(&i) {
+                self.channel_states.insert(i, ReadState::Packet(None));
+                return Ok(i);
+            }
+        }
+        panic!("Shouldn't get here")
+    }
+
+    fn release_id(&mut self, id: u32) {
+        let _ = self.channel_states.remove(&id);
+
+        if self.state.is_draining() && self.channel_states.is_empty() {
+            self.state = SessionState::Closed;
+        }
+    }
+
+    fn elect_leader(&self) {
+        // The leader (the caller) will be in a state of Packet(None)
+        for (_,v) in self.channel_states.iter() {
+            if let &ReadState::Waiting(cv) = v {
+                    unsafe { (*cv).notify_one(); }
+                    break;
+            }
+        }
+    }
+
+    fn check_ok(&self) -> io::Result<()> {
+        match &self.state {
+            &SessionState::Dispatching => Ok(()),
+            &SessionState::Error(ref k, ref r) => Err(io::Error::new(k.clone(), r.as_str())),
+            &SessionState::Draining  => Err(io::Error::new(ErrorKind::ConnectionRefused, "Draining")),
+            &SessionState::Closed => Err(io::Error::new(ErrorKind::BrokenPipe, "Connection closed")),
+        }
+    }
+
+    fn drain(&mut self) {
+        self.state = SessionState::Draining;
+    }
+
+    fn abort_session(&mut self, reason: ErrorKind, msg: &str) {
+        self.state = SessionState::Error(reason, msg.to_owned());
+        // We have a malformed packet or connection error. Alert the channels.
+        for (_,v) in self.channel_states.iter_mut() {
+            let mut next = ReadState::Poisoned(io::Error::new(reason.clone(), msg));
+            mem::swap(&mut next, v);
+            if let ReadState::Waiting(cv) = next {
+                unsafe { (*cv).notify_one(); }
+            }
+        }
+    }
 }
 
 impl MuxSessionImpl {
     pub fn new(socket: TcpStream) -> io::Result<MuxSessionImpl> {
         let read = Box::new(BufReader::new(try!(socket.try_clone())));
-
-        let read_state = Mutex::new(SessionReadState {
-            channel_states: BTreeMap::new(),
-            read: Some(read),
-        });
+        let read_state = Mutex::new(SessionReadState::new(read));
 
         Ok(MuxSessionImpl {
             read_state: read_state,
@@ -70,18 +149,18 @@ impl MuxSessionImpl {
         // only addresses packets intended for this channel
         match try!(self.s_decode_frame(packet)) {
             MessageFrame::Rdispatch(d) => Ok(d),
-            MessageFrame::Rerr(reason) => Err(io::Error::new(io::ErrorKind::Other, reason)),
+            MessageFrame::Rerr(reason) => Err(io::Error::new(ErrorKind::Other, reason)),
 
             MessageFrame::Tlease(_) => {
                 let msg = format!("Protocol error: Invalid channel ({}) for Tlease.", id);
-                self.abort_session(&msg)
+                self.abort_session_proto(&msg)
             }
 
             // the rest of these are unexpected messages at this point
             other => {
                 // Tdispatch, Pings, Drains, and Inits
                 let msg = format!("Unexpected frame: {:?}", &other);
-                self.abort_session(&msg)
+                self.abort_session_proto(&msg)
             }
         }
     }
@@ -108,7 +187,7 @@ impl MuxSessionImpl {
             }
             invalid => {
                 let msg = format!("Received invalid reply for Ping: {:?}", invalid);
-                Err(io::Error::new(ErrorKind::InvalidData, msg))
+                self.abort_session_proto(&msg)
             }
         }
     }
@@ -129,7 +208,7 @@ impl MuxSessionImpl {
 
         if result.is_err() {
             let mut read_state = self.read_state.lock().unwrap();
-            let _ = read_state.channel_states.remove(&id);
+            read_state.release_id(id);
         }
 
         result
@@ -156,12 +235,13 @@ impl MuxSessionImpl {
 
     // Wait for a result or for the Read to become available
     fn dispatch_read_slave(&self, id: u32) -> Either<Box<Read>, io::Result<MuxPacket>> {
-        let mut read_state = self.read_state.lock().unwrap();
         let cv = Condvar::new(); // would be sweet if we could use a static...
+        let mut read_state = self.read_state.lock().unwrap();
 
         loop {
             let read_available = read_state.read.is_some();
 
+            // TODO: this is functionality that should be in the SessionReadState
             let result = match read_state.channel_states.get_mut(&id).unwrap() {
                 &mut ReadState::Packet(ref mut packet) if packet.is_some() => {
                     // we have data
@@ -173,7 +253,8 @@ impl MuxSessionImpl {
                     Some(Err(copy_error(err)))
                 }
                     // either this is the first go, we were elected leader,
-                    // or a spurious wakeup occured
+                    // or a spurious wakeup occured. If we become leader set
+                    // our state to an empty packet.
                 st => {
                     *st = if read_available { ReadState::Packet(None) }
                           else { ReadState::Waiting(&cv) };
@@ -183,10 +264,11 @@ impl MuxSessionImpl {
 
             match result {
                 Some(result) => {
-                    let _ = read_state.channel_states.remove(&id);
+                    read_state.release_id(id);
                     return Either::Right(result);
                 }
                 None if read_available => {
+                    // Becoming the leader
                     let mut old =  None;
                     mem::swap(&mut read_state.read, &mut old);
                     return Either::Left(old.unwrap());
@@ -194,7 +276,6 @@ impl MuxSessionImpl {
                 None => {
                     // wait for someone to wake us up
                     read_state = cv.wait(read_state).unwrap();
-
                 }
             }
         }
@@ -212,27 +293,13 @@ impl MuxSessionImpl {
 
             let result = match packet {
                 Err(err) => {
-                    // We have a malformed packet or connection error. Alert everyone.
-                    for (_,v) in read_state.channel_states.iter_mut() {
-                        let mut next = ReadState::Poisoned(copy_error(&err));
-                        mem::swap(&mut next, v);
-                        if let ReadState::Waiting(cv) = next {
-                            unsafe { (*cv).notify_one(); }
-                        }
-                    }
-
+                    read_state.abort_session(err.kind(), err.description());
                     Err(err)
                 }
                 Ok(packet) => {
                      if packet.tag.id == id {
-                        // our packet. Need to elect a new leader
-                        for (_,v) in read_state.channel_states.iter() {
-                            if let &ReadState::Waiting(cv) = v {
-                                    unsafe { (*cv).notify_one(); }
-                                    break;
-                            }
-                        }
-
+                        // our packet. Need to elect a new leader and return
+                        read_state.elect_leader();
                         Ok(packet)
                     } else {
                         if let Some(st) = read_state.channel_states.get_mut(&packet.tag.id) {
@@ -242,15 +309,42 @@ impl MuxSessionImpl {
                             if let ReadState::Waiting(cv) = old {
                                 unsafe { (*cv).notify_one(); }
                             }
-                        } else {
-                            try!(self.unhandled_packet(packet));
+                            continue;
                         }
+                        // Note: this would better as an `else` but the borrow checker
+                        //       gets upset about borrowing read_state again.
+                        // If we get here, the packet is unhandled by any channel.
+                        let id = packet.tag.id;
+                        match decode_frame(packet.tpe, packet.buffer) {
+                            Ok(MessageFrame::Tlease(_)) if id == 0 => {
+                                println!("Unhandled Tlease frame.");
+                            }
+
+                            Ok(MessageFrame::Tping) => try!(self.ping_reply(id)),
+                            Ok(MessageFrame::Tdrain) => {
+                                read_state.drain();
+                            }
+
+                            // All other packets are unexpected
+                            Ok(frame) => {
+                                let msg = format!("Unexpected frame: {:?}", &frame);
+                                read_state.abort_session(ErrorKind::InvalidData, &msg);
+                                return Err(io::Error::new(ErrorKind::InvalidData, msg));
+                            }
+
+                            // Packet decode failure
+                            Err(err) => {
+                                read_state.abort_session(err.kind(), err.description());
+                                return Err(err);
+                            }
+                        }
+
                         continue;
                     }
                 }
             };
             // cleanup code. If we get past the match, we have a result
-            let _ = read_state.channel_states.remove(&id);
+            let _ = read_state.release_id(id);
             read_state.read = Some(read);
             return result;
         }
@@ -261,38 +355,10 @@ impl MuxSessionImpl {
         let frame = decode_frame(packet.tpe, packet.buffer);
 
         if let &Err(ref err) = &frame {
-            let _ = self.abort_session::<()>(err.description());
+            let _ = self.abort_session::<()>(err.kind(), err.description());
         }
 
         frame
-    }
-
-    fn unhandled_packet(&self, packet: MuxPacket) -> io::Result<()> {
-        let id = packet.tag.id;
-
-        match try!(self.s_decode_frame(packet)) {
-            MessageFrame::Tlease(_) if id == 0 => {
-                println!("Unhandled Tlease frame.");
-                Ok(())
-            }
-
-            MessageFrame::Tping => self.ping_reply(id),
-
-            MessageFrame::Tdrain => self.drain(),
-            MessageFrame::Rdrain => self.abort_session("Unexpected Rdrain"),
-
-            MessageFrame::Rinit(_) => self.abort_session("Unexpected Rinit"),
-            MessageFrame::Tinit(_) => self.abort_session("Unexpected Tinit"),
-
-            frame => {
-                let msg = format!("Unexpected frame: {:?}", &frame);
-                self.abort_session(&msg)
-            }
-        }
-    }
-
-    fn drain(&self) -> io::Result<()> {
-        panic!("Not implemented!")
     }
 
     fn ping_reply(&self, id: u32) -> io::Result<()> {
@@ -306,23 +372,23 @@ impl MuxSessionImpl {
         write.flush()
     }
 
-    // Abort the session, closing down and returning a failed result
-    fn abort_session<T>(&self, msg: &str) -> io::Result<T> {
-        panic!("abort_session not implemented");
-        Err(io::Error::new(io::ErrorKind::InvalidData, msg))
+    #[inline]
+    fn abort_session_proto<T>(&self, msg: &str) -> io::Result<T> {
+        self.abort_session(ErrorKind::InvalidData, msg)
     }
 
-    fn next_id(&self) -> io::Result<u32> {
-        let mut channel_states = &mut self.read_state.lock().unwrap().channel_states;
+    // Abort the session, closing down and returning a failed result
+    fn abort_session<T>(&self, reason: ErrorKind, msg: &str) -> io::Result<T> {
+        let mut read_state = self.read_state.lock().unwrap();
+        read_state.abort_session(reason.clone(), msg);
 
-        for i in 2..MAX_TAG {
-            let i = i as u32;
-            if !channel_states.contains_key(&i) {
-                channel_states.insert(i, ReadState::Packet(None));
-                return Ok(i);
-            }
-        }
-        panic!("Shouldn't get here")
+        Err(io::Error::new(reason, msg))
+    }
+
+    #[inline]
+    fn next_id(&self) -> io::Result<u32> {
+        let mut read_state = self.read_state.lock().unwrap();
+        read_state.next_id()
     }
 }
 

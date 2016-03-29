@@ -3,4 +3,5 @@ Cargo.lock
 
 **.swp
 callgrind.**
+cachegrind.**
 
