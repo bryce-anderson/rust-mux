@@ -56,7 +56,7 @@ macro_rules! tryb {
 pub struct MuxPacket {
     pub tpe: i8,
     pub tag: Tag,
-    pub buffer: SharedReadBuffer,
+    pub buffer: Vec<u8>,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -131,7 +131,7 @@ impl Tag {
         }
     }
 
-    pub fn decode_tag<T: Read>(r: &mut T) -> io::Result<Tag> {
+    pub fn decode_tag(r: &mut Read) -> io::Result<Tag> {
         let mut bts = [0; 3];
         let _ = try!(r.read(&mut bts));
 
@@ -350,11 +350,11 @@ pub fn read_frame(input: &mut Read) -> io::Result<MuxPacket> {
         size as usize
     };
 
-    let mut buf = vec![0;size];
+    let tpe = tryb!(input.read_i8());
+    let tag = try!(Tag::decode_tag(input));
+
+    let mut buf = vec![0;size-4];
     try!(input.read_exact(&mut buf));
-    let mut buf = SharedReadBuffer::new(buf);
-    let tpe = tryb!(buf.read_i8());
-    let tag = try!(Tag::decode_tag(&mut buf));
     Ok(MuxPacket {
         tpe: tpe,
         tag: tag,
@@ -370,7 +370,7 @@ pub fn read_message(input: &mut Read) -> io::Result<Message> {
 
 // expects a SharedReadBuffer of the whole mux frame
 pub fn decode_message(input: MuxPacket) -> io::Result<Message> {
-    let frame = try!(decode_frame(input.tpe, input.buffer));
+    let frame = try!(decode_frame(input.tpe, SharedReadBuffer::new(input.buffer)));
     Ok(Message {
         tag: input.tag,
         frame: frame,

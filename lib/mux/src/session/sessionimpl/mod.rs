@@ -1,5 +1,7 @@
-extern crate sharedbuffer;
 extern crate time;
+
+extern crate sharedbuffer;
+use sharedbuffer::SharedReadBuffer;
 
 use super::super::*;
 
@@ -147,7 +149,7 @@ impl MuxSessionImpl {
 
         let packet = try!(self.dispatch_read(id));
         // only addresses packets intended for this channel
-        match decode_frame(packet.tpe, packet.buffer) {
+        match decode_frame(packet.tpe, SharedReadBuffer::new(packet.buffer)) {
             Ok(MessageFrame::Rdispatch(d)) => Ok(d),
             Ok(MessageFrame::Rerr(reason)) => Err(io::Error::new(ErrorKind::Other, reason)),
 
@@ -313,7 +315,7 @@ impl MuxSessionImpl {
                         //       gets upset about borrowing read_state again.
                         // If we get here, the packet is unhandled by any channel.
                         let id = packet.tag.id;
-                        match decode_frame(packet.tpe, packet.buffer) {
+                        match decode_frame(packet.tpe, SharedReadBuffer::new(packet.buffer)) {
                             Ok(MessageFrame::Tlease(_)) if id == 0 => {
                                 println!("Unhandled Tlease frame.");
                                 continue;
@@ -390,4 +392,13 @@ impl MuxSessionImpl {
 
 fn copy_error(err: &io::Error) -> io::Error {
     io::Error::new(err.kind(), err.description())
+}
+
+#[cfg(test)]
+mod tst; // test helpers
+
+// tests
+#[test]
+fn test_dispatch_success() {
+
 }
