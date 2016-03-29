@@ -54,3 +54,22 @@ fn main() {
   //test_trequest(&mut socket);
   test_session(socket);
 }
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    #[test]
+    fn run() {
+        test_crate("mux");
+    }
+
+    fn test_crate(subcrate: &str) {
+
+        let status = Command::new("cargo").args(&["test", "-p", subcrate]).status().unwrap();
+        assert!(status.success(),
+                "test for sub-crate: {} returned: {:?}",
+                subcrate,
+                status.code().unwrap());
+    }
+}
