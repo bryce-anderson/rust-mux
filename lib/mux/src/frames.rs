@@ -141,15 +141,14 @@ pub fn decode_init(data: &[u8]) -> io::Result<Init> {
 }
 
 pub fn encode_rdispatch(buffer: &mut Write, msg: &Rdispatch) -> io::Result<()> {
-    tryb!(buffer.write_i8(msg.status));
+    tryb!(buffer.write_u8(msg.status));
     try!(encode_contexts(buffer, &msg.contexts));
     buffer.write_all(&msg.body)
 }
 
 // Expects to consume the whole stream
 pub fn decode_rdispatch<R: Read>(mut buffer: R) -> io::Result<Rdispatch> {
-
-    let status = tryb!(buffer.read_i8());
+    let status = tryb!(buffer.read_u8());
     let contexts = try!(decode_contexts(&mut buffer));
     let mut body = Vec::new();
     let _ = try!(buffer.read_to_end(&mut body));

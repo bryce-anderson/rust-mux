@@ -98,7 +98,7 @@ pub struct Tdispatch {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Rdispatch {
-    pub status: i8,
+    pub status: u8,
     pub contexts: Contexts,
     pub body: Vec<u8>,
 }

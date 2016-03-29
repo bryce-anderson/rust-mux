@@ -1,7 +1,4 @@
-extern crate sharedbuffer;
-
 use super::*;
-use sharedbuffer::*;
 
 use std::io;
 
@@ -14,8 +11,8 @@ fn roundtrip_rdispatch() {
     fn tester(msg: &Rdispatch) {
         let mut w = new_write();
         let _ = frames::encode_rdispatch(&mut w, msg).unwrap();
-        let w = SharedReadBuffer::new(w.into_inner());
-        let decoded = frames::decode_rdispatch(w).unwrap();
+        let w = w.into_inner();
+        let decoded = frames::decode_rdispatch(&w[..]).unwrap();
 
         assert_eq!(msg, &decoded);
     }
@@ -23,13 +20,13 @@ fn roundtrip_rdispatch() {
     tester(&Rdispatch {
         status: 2,
         contexts: vec![(vec![1, 2, 3], vec![4, 5, 6])],
-        body: SharedReadBuffer::new(vec![1, 2, 3]),
+        body: vec![1, 2, 3],
     });
 
     tester(&Rdispatch {
-        status: -1,
+        status: 0,
         contexts: Vec::new(),
-        body: SharedReadBuffer::empty(),
+        body: Vec::new(),
     });
 
 }
@@ -39,8 +36,8 @@ fn roundtrip_init() {
     fn tester(msg: &Init) {
         let mut w = new_write();
         let _ = frames::encode_init(&mut w, msg).unwrap();
-        let w = SharedReadBuffer::new(w.into_inner());
-        let decoded = frames::decode_init(w).unwrap();
+        let w = w.into_inner();
+        let decoded = frames::decode_init(&w[..]).unwrap();
 
         assert_eq!(msg, &decoded);
     }
@@ -51,7 +48,7 @@ fn roundtrip_init() {
     });
 
     tester(&Init {
-        version: -1,
+        version: 1,
         headers: vec![(vec![43, 127], vec![])],
     });
 }
@@ -61,8 +58,8 @@ fn roundtrip_tdispatch() {
     fn tester(msg: &Tdispatch) {
         let mut w = new_write();
         let _ = frames::encode_tdispatch(&mut w, msg).unwrap();
-        let w = SharedReadBuffer::new(w.into_inner());
-        let decoded = frames::decode_tdispatch(w).unwrap();
+        let w = w.into_inner();
+        let decoded = frames::decode_tdispatch(&w[..]).unwrap();
 
         assert_eq!(msg, &decoded);
     }
@@ -71,14 +68,14 @@ fn roundtrip_tdispatch() {
         contexts: vec![(vec![1, 2, 3], vec![4, 5, 6])],
         dest: "foo".to_string(),
         dtable: DTable::from(vec![("foo".to_string(), "bar".to_string())]),
-        body: SharedReadBuffer::new(vec![1, 2, 3]),
+        body: vec![1, 2, 3],
     });
 
     tester(&Tdispatch {
         contexts: Vec::new(),
         dest: "foo".to_string(),
         dtable: DTable::new(),
-        body: SharedReadBuffer::empty(),
+        body: Vec::new(),
     });
 
 }
