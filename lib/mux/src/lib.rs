@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
+pub type Headers = Vec<(String, Vec<u8>)>;
 pub type Contexts = Vec<(Vec<u8>, Vec<u8>)>;
 
 pub mod types {
@@ -75,6 +76,8 @@ pub struct Message {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MessageFrame {
+    Treq(Treq),
+    Rreq(Rmsg),
     Tdispatch(Tdispatch),
     Rdispatch(Rdispatch),
     Tinit(Init),
@@ -86,6 +89,18 @@ pub enum MessageFrame {
     Rerr(String),
     Tlease(Duration),   // Notification of a lease of resources for the specified duration
     // Tdiscarded(String), // Sent by a client to alert the server of a discarded message
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub struct Treq {
+    pub headers: Headers,
+    pub body: Vec<u8>,
+}
+
+impl Treq {
+    pub fn frame_size(&self) -> usize {
+        panic!("Not implemented")
+    }
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -107,6 +122,16 @@ pub enum Rmsg {
     Ok(Vec<u8>),
     Error(String),
     Nack(String),
+}
+
+impl Rmsg {
+    pub fn frame_size(&self) -> usize {
+        match self {
+            &Rmsg::Ok(ref b) => b.len(),
+            &Rmsg::Error(ref m) => m.as_bytes().len(),
+            &Rmsg::Nack(ref m) => m.as_bytes().len(),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -197,6 +222,8 @@ impl DTable {
 impl MessageFrame {
     pub fn frame_size(&self) -> usize {
         match self {
+            &MessageFrame::Treq(ref f) => f.frame_size(),
+            &MessageFrame::Rreq(ref f) => f.frame_size(),
             &MessageFrame::Tdispatch(ref f) => f.frame_size(),
             &MessageFrame::Rdispatch(ref f) => f.frame_size(),
             &MessageFrame::Tinit(ref f) => f.frame_size(),
@@ -212,6 +239,8 @@ impl MessageFrame {
 
     pub fn frame_id(&self) -> i8 {
         match self {
+            &MessageFrame::Treq(_) => types::TREQ,
+            &MessageFrame::Rreq(_) => types::RREQ,
             &MessageFrame::Tdispatch(_) => types::TDISPATCH,
             &MessageFrame::Rdispatch(_) => types::RDISPATCH,
             &MessageFrame::Tinit(_) => types::TINIT,
@@ -296,8 +325,10 @@ pub fn encode_message(buffer: &mut Write, msg: &Message) -> io::Result<()> {
     encode_frame(buffer, &msg.frame)
 }
 
-fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
+pub fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
     match frame {
+        &MessageFrame::Treq(ref f) => frames::encode_treq(buffer, f),
+        &MessageFrame::Rreq(ref f) => frames::encode_rreq(buffer, f),
         &MessageFrame::Tdispatch(ref f) => frames::encode_tdispatch(buffer, f),
         &MessageFrame::Rdispatch(ref f) => frames::encode_rdispatch(buffer, f),
         &MessageFrame::Tinit(ref f) => frames::encode_init(buffer, f),
@@ -322,6 +353,8 @@ fn encode_frame(buffer: &mut Write, frame: &MessageFrame) -> io::Result<()> {
 // Decodes `data` into a frame if type `tpe`
 pub fn decode_frame(tpe: i8, data: &[u8]) -> io::Result<MessageFrame> {
     Ok(match tpe {
+        types::TREQ => MessageFrame::Treq(try!(frames::decode_treq(data))),
+        types::RREQ => MessageFrame::Rreq(try!(frames::decode_rreq(data))),
         types::TDISPATCH => MessageFrame::Tdispatch(try!(frames::decode_tdispatch(data))),
         types::RDISPATCH => MessageFrame::Rdispatch(try!(frames::decode_rdispatch(data))),
         types::TINIT => MessageFrame::Tinit(try!(frames::decode_init(data))),

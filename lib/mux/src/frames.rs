@@ -7,16 +7,61 @@ use std::io::{Cursor, ErrorKind, Read, Write};
 
 use super::*;
 
-use std::u16;
+use std::{u8, u16};
 
-pub fn encode_contexts<W: Write + ?Sized>(buffer: &mut W, contexts: &Contexts) -> io::Result<()> {
-    // TODO: these shouldn't be asserts.
-    assert!(contexts.len() <= u16::MAX as usize);
+pub fn encode_headers(buffer: &mut Write, headers: &Headers) -> io::Result<()> {
+    if headers.len() > u8::MAX as usize {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput, format!("Too many headers: {}", headers.len())
+        ));
+    }
+
+    try!(buffer.write_u8(headers.len() as u8));
+
+    for &(ref k, ref v) in headers {
+        let k = k.as_bytes();
+        if k.len() > u8::MAX as usize || v.len() > u8::MAX as usize {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Invalid header size"));
+        }
+
+        try!(buffer.write_u8(k.len() as u8));
+        try!(buffer.write_all(k));
+        try!(buffer.write_u8(v.len() as u8));
+        try!(buffer.write_all(v));
+    }
+    Ok(())
+}
+
+pub fn decode_headers<R: Read + ?Sized>(buffer: &mut R) -> io::Result<Headers> {
+    let len = tryb!(buffer.read_u8()) as usize;
+    let mut acc = Vec::with_capacity(len);
+
+    for _ in 0..len {
+        let key_len = tryb!(buffer.read_u8());
+        let mut key = vec![0;key_len as usize];
+        try!(buffer.read_exact(&mut key[..]));
+
+        let val_len = tryb!(buffer.read_u8());
+        let mut val = vec![0;val_len as usize];
+        try!(buffer.read_exact(&mut val[..]));
+        acc.push((try!(to_string(key)), val));
+    }
+
+    Ok(acc)
+}
+
+pub fn encode_contexts(buffer: &mut Write, contexts: &Contexts) -> io::Result<()> {
+    if contexts.len() > u16::MAX as usize {
+        return Err(io::Error::new(ErrorKind::InvalidInput, "Too many contexts to encode"));
+
+    }
+
     tryb!(buffer.write_u16::<BigEndian>(contexts.len() as u16));
 
     for &(ref k, ref v) in contexts {
-        assert!(k.len() <= u16::MAX as usize);
-        assert!(v.len() <= u16::MAX as usize);
+        if k.len() > u16::MAX as usize || v.len() > u16::MAX as usize {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Context too large to encode"));
+        }
 
         tryb!(buffer.write_u16::<BigEndian>(k.len() as u16));
         try!(buffer.write_all(&k[..]));
@@ -29,9 +74,9 @@ pub fn encode_contexts<W: Write + ?Sized>(buffer: &mut W, contexts: &Contexts) -
 }
 
 pub fn decode_contexts<R: Read + ?Sized>(buffer: &mut R) -> io::Result<Contexts> {
-    let len = tryb!(buffer.read_u16::<BigEndian>());
+    let len = tryb!(buffer.read_u16::<BigEndian>()) as usize;
 
-    let mut acc = Vec::new();
+    let mut acc = Vec::with_capacity(len);
 
     for _ in 0..len {
         let key_len = tryb!(buffer.read_u16::<BigEndian>());
@@ -141,11 +186,7 @@ pub fn decode_init(data: &[u8]) -> io::Result<Init> {
 }
 
 pub fn encode_rdispatch(buffer: &mut Write, frame: &Rdispatch) -> io::Result<()> {
-    let (status, body) = match &frame.msg {
-        &Rmsg::Ok(ref body) => (0, body.as_ref()),
-        &Rmsg::Error(ref msg) => (1, msg.as_bytes()),
-        &Rmsg::Nack(ref msg) => (2, msg.as_bytes()),
-    };
+    let (status, body) = rmsg_status_body(&frame.msg);
 
     tryb!(buffer.write_u8(status));
     try!(encode_contexts(buffer, &frame.contexts));
@@ -161,20 +202,24 @@ pub fn decode_rdispatch<R: Read>(mut buffer: R) -> io::Result<Rdispatch> {
 
     Ok(Rdispatch {
         contexts: contexts,
-        msg: try!(decode_rmsg(status, body)),
+        msg: try!(decode_rmsg_body(status, body)),
     })
 }
 
-pub fn decode_rmsg(status: u8, body: Vec<u8>) -> io::Result<Rmsg> {
-    match status {
-        0 => Ok(Rmsg::Ok(body)),
-        1 => Ok(Rmsg::Error(try!(to_string(body)))),
-        2 => Ok(Rmsg::Nack(try!(to_string(body)))),
-        other => Err(
-            io::Error::new(ErrorKind::InvalidData, format!("Invalid status code: {}", other))
-        )
-    }
+pub fn encode_rreq(buffer: &mut Write, frame: &Rmsg) -> io::Result<()> {
+    let (status, body) = rmsg_status_body(frame);
+    tryb!(buffer.write_u8(status));
+    buffer.write_all(body)
 }
+
+pub fn decode_rreq<R: Read>(mut buffer: R) -> io::Result<Rmsg> {
+    let status = try!(buffer.read_u8());
+    let mut body = Vec::new();
+    try!(buffer.read_to_end(&mut body));
+    decode_rmsg_body(status, body)
+}
+
+
 
 // Expects to consume the whole stream
 pub fn decode_tdispatch<R: Read>(mut buffer: R) -> io::Result<Tdispatch> {
@@ -193,10 +238,47 @@ pub fn decode_tdispatch<R: Read>(mut buffer: R) -> io::Result<Tdispatch> {
     })
 }
 
-
 pub fn encode_tdispatch(buffer: &mut Write, msg: &Tdispatch) -> io::Result<()> {
     try!(encode_contexts(buffer, &msg.contexts));
     try!(encode_string(buffer, &msg.dest));
     try!(encode_dtable(buffer, &msg.dtable));
     buffer.write_all(&msg.body)
+}
+
+pub fn decode_treq<R: Read>(mut buffer: R) -> io::Result<Treq> {
+    let headers = try!(decode_headers(&mut buffer));
+    let mut body = Vec::new();
+
+    let _ = try!(buffer.read_to_end(&mut body));
+    Ok(Treq {
+        headers: headers,
+        body: body,
+    })
+}
+
+#[inline]
+pub fn encode_treq(buffer: &mut Write, msg: &Treq) -> io::Result<()> {
+    try!(encode_headers(buffer, &msg.headers));
+    buffer.write_all(&msg.body)
+}
+
+#[inline]
+fn rmsg_status_body(msg: &Rmsg) -> (u8, &[u8]) {
+    match msg {
+        &Rmsg::Ok(ref body) => (0, body.as_ref()),
+        &Rmsg::Error(ref msg) => (1, msg.as_bytes()),
+        &Rmsg::Nack(ref msg) => (2, msg.as_bytes()),
+    }
+}
+
+#[inline]
+fn decode_rmsg_body(status: u8, body: Vec<u8>) -> io::Result<Rmsg> {
+    match status {
+        0 => Ok(Rmsg::Ok(body)),
+        1 => Ok(Rmsg::Error(try!(to_string(body)))),
+        2 => Ok(Rmsg::Nack(try!(to_string(body)))),
+        other => Err(
+            io::Error::new(ErrorKind::InvalidData, format!("Invalid status code: {}", other))
+        )
+    }
 }

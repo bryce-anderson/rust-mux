@@ -7,6 +7,44 @@ fn new_write() -> io::Cursor<Vec<u8>> {
 }
 
 #[test]
+fn roundtrip_treq() {
+    fn tester(msg: &Treq) {
+        let mut w = new_write();
+        let _ = frames::encode_treq(&mut w, msg).unwrap();
+        let w = w.into_inner();
+        let decoded = frames::decode_treq(&w[..]).unwrap();
+
+        assert_eq!(msg, &decoded);
+    }
+
+    tester(&Treq {
+        headers: vec![("foo".to_owned(), vec![4, 5, 6])],
+        body: vec![1, 2, 3],
+    });
+
+    tester(&Treq {
+        headers: Vec::new(),
+        body: Vec::new(),
+    });
+}
+
+#[test]
+fn roundtrip_rreq() {
+    fn tester(msg: &MessageFrame) {
+        let mut w = new_write();
+        let _ = encode_frame(&mut w, msg).unwrap();
+        let w = w.into_inner();
+        let decoded = decode_frame(msg.frame_id(), &w[..]).unwrap();
+
+        assert_eq!(msg, &decoded);
+    }
+
+    tester(&MessageFrame::Rreq(Rmsg::Ok(vec![1, 2, 3])));
+    tester(&MessageFrame::Rreq(Rmsg::Nack("Boo".to_owned())));
+    tester(&MessageFrame::Rreq(Rmsg::Error("Boo".to_owned())));
+}
+
+#[test]
 fn roundtrip_rdispatch() {
     fn tester(msg: &Rdispatch) {
         let mut w = new_write();
