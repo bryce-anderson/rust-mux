@@ -99,7 +99,14 @@ pub struct Treq {
 
 impl Treq {
     pub fn frame_size(&self) -> usize {
-        panic!("Not implemented")
+        let mut size = 1; // header count
+        for &(ref k, ref v) in &self.headers {
+            size += 2; // key and value lengths
+            size += k.as_bytes().len();
+            size += v.len();
+        }
+
+        size + self.body.len()
     }
 }
 
