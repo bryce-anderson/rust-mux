@@ -19,13 +19,11 @@ pub fn encode_headers(buffer: &mut Write, headers: &Headers) -> io::Result<()> {
     try!(buffer.write_u8(headers.len() as u8));
 
     for &(ref k, ref v) in headers {
-        let k = k.as_bytes();
-        if k.len() > u8::MAX as usize || v.len() > u8::MAX as usize {
+        if v.len() > u8::MAX as usize {
             return Err(io::Error::new(ErrorKind::InvalidInput, "Invalid header size"));
         }
 
-        try!(buffer.write_u8(k.len() as u8));
-        try!(buffer.write_all(k));
+        try!(buffer.write_u8(*k));
         try!(buffer.write_u8(v.len() as u8));
         try!(buffer.write_all(v));
     }
@@ -37,14 +35,11 @@ pub fn decode_headers<R: Read + ?Sized>(buffer: &mut R) -> io::Result<Headers> {
     let mut acc = Vec::with_capacity(len);
 
     for _ in 0..len {
-        let key_len = tryb!(buffer.read_u8());
-        let mut key = vec![0;key_len as usize];
-        try!(buffer.read_exact(&mut key[..]));
-
+        let key = tryb!(buffer.read_u8());
         let val_len = tryb!(buffer.read_u8());
         let mut val = vec![0;val_len as usize];
         try!(buffer.read_exact(&mut val[..]));
-        acc.push((try!(to_string(key)), val));
+        acc.push((key, val));
     }
 
     Ok(acc)

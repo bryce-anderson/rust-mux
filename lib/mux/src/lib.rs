@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
-pub type Headers = Vec<(String, Vec<u8>)>;
+pub type Headers = Vec<(u8, Vec<u8>)>;
 pub type Contexts = Vec<(Vec<u8>, Vec<u8>)>;
 
 pub mod types {
@@ -50,7 +50,7 @@ macro_rules! tryb {
     )
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MuxPacket {
     pub tpe: i8,
     pub tag: Tag,
@@ -68,7 +68,7 @@ pub struct Dtab {
     pub entries: Vec<(String, String)>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Message {
     pub tag: Tag,
     pub frame: MessageFrame,
@@ -100,9 +100,8 @@ pub struct Treq {
 impl Treq {
     pub fn frame_size(&self) -> usize {
         let mut size = 1; // header count
-        for &(ref k, ref v) in &self.headers {
+        for &(_, ref v) in &self.headers {
             size += 2; // key and value lengths
-            size += k.as_bytes().len();
             size += v.len();
         }
 
@@ -132,7 +131,8 @@ pub enum Rmsg {
 }
 
 impl Rmsg {
-    pub fn frame_size(&self) -> usize {
+    #[inline]
+    pub fn msg_size(&self) -> usize {
         match self {
             &Rmsg::Ok(ref b) => b.len(),
             &Rmsg::Error(ref m) => m.as_bytes().len(),
@@ -230,7 +230,7 @@ impl MessageFrame {
     pub fn frame_size(&self) -> usize {
         match self {
             &MessageFrame::Treq(ref f) => f.frame_size(),
-            &MessageFrame::Rreq(ref f) => f.frame_size(),
+            &MessageFrame::Rreq(ref f) => 1 + f.msg_size(),
             &MessageFrame::Tdispatch(ref f) => f.frame_size(),
             &MessageFrame::Rdispatch(ref f) => f.frame_size(),
             &MessageFrame::Tinit(ref f) => f.frame_size(),
