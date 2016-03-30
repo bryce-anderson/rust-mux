@@ -64,7 +64,7 @@ pub struct Tag {
 }
 
 #[derive(PartialEq, Eq, Debug)]
-pub struct DTable {
+pub struct Dtab {
     pub entries: Vec<(String, String)>,
 }
 
@@ -114,7 +114,7 @@ impl Treq {
 pub struct Tdispatch {
     pub contexts: Contexts,
     pub dest: String,
-    pub dtable: DTable,
+    pub dtab: Dtab,
     pub body: Vec<u8>,
 }
 
@@ -209,15 +209,15 @@ impl Init {
     }
 }
 
-impl DTable {
+impl Dtab {
     #[inline]
-    pub fn new() -> DTable {
-        DTable::from(Vec::new())
+    pub fn new() -> Dtab {
+        Dtab::from(Vec::new())
     }
 
     #[inline]
-    pub fn from(entries: Vec<(String, String)>) -> DTable {
-        DTable { entries: entries }
+    pub fn from(entries: Vec<(String, String)>) -> Dtab {
+        Dtab { entries: entries }
     }
 
     #[inline]
@@ -275,7 +275,7 @@ fn context_size(contexts: &Contexts) -> usize {
 }
 
 #[inline]
-fn dtable_size(table: &DTable) -> usize {
+fn dtab_size(table: &Dtab) -> usize {
     let mut size = 2; // context size
 
     for &(ref k, ref v) in &table.entries {
@@ -291,7 +291,7 @@ impl Tdispatch {
     fn frame_size(&self) -> usize {
         let mut size = 2 + // dest size
                        context_size(&self.contexts) +
-                       dtable_size(&self.dtable);
+                       dtab_size(&self.dtab);
 
         size += self.dest.as_bytes().len();
         size += self.body.len();
@@ -302,7 +302,7 @@ impl Tdispatch {
         Tdispatch {
             contexts: Vec::new(),
             dest: dest,
-            dtable: DTable::new(),
+            dtab: Dtab::new(),
             body: body,
         }
     }

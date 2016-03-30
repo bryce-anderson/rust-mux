@@ -92,7 +92,7 @@ pub fn decode_contexts<R: Read + ?Sized>(buffer: &mut R) -> io::Result<Contexts>
     Ok(acc)
 }
 
-pub fn decode_dtable<R: Read + ?Sized>(buffer: &mut R) -> io::Result<DTable> {
+pub fn decode_dtab<R: Read + ?Sized>(buffer: &mut R) -> io::Result<Dtab> {
     let ctxs: Vec<(Vec<u8>, Vec<u8>)> = try!(decode_contexts(buffer));
     let mut acc = Vec::with_capacity(ctxs.len());
 
@@ -102,10 +102,10 @@ pub fn decode_dtable<R: Read + ?Sized>(buffer: &mut R) -> io::Result<DTable> {
         acc.push((k, v));
     }
 
-    Ok(DTable { entries: acc })
+    Ok(Dtab { entries: acc })
 }
 
-pub fn encode_dtable<R: Write + ?Sized>(buffer: &mut R, table: &DTable) -> io::Result<()> {
+pub fn encode_dtab<R: Write + ?Sized>(buffer: &mut R, table: &Dtab) -> io::Result<()> {
     tryb!(buffer.write_u16::<BigEndian>(table.entries.len() as u16));
 
     for &(ref k, ref v) in &table.entries {
@@ -225,7 +225,7 @@ pub fn decode_rreq<R: Read>(mut buffer: R) -> io::Result<Rmsg> {
 pub fn decode_tdispatch<R: Read>(mut buffer: R) -> io::Result<Tdispatch> {
     let contexts = try!(decode_contexts(&mut buffer));
     let dest = try!(decode_string(&mut buffer));
-    let dtable = try!(decode_dtable(&mut buffer));
+    let dtab = try!(decode_dtab(&mut buffer));
 
     let mut body = Vec::new();
     let _ = try!(buffer.read_to_end(&mut body));
@@ -233,7 +233,7 @@ pub fn decode_tdispatch<R: Read>(mut buffer: R) -> io::Result<Tdispatch> {
     Ok(Tdispatch {
         contexts: contexts,
         dest: dest,
-        dtable: dtable,
+        dtab: dtab,
         body: body,
     })
 }
@@ -241,7 +241,7 @@ pub fn decode_tdispatch<R: Read>(mut buffer: R) -> io::Result<Tdispatch> {
 pub fn encode_tdispatch(buffer: &mut Write, msg: &Tdispatch) -> io::Result<()> {
     try!(encode_contexts(buffer, &msg.contexts));
     try!(encode_string(buffer, &msg.dest));
-    try!(encode_dtable(buffer, &msg.dtable));
+    try!(encode_dtab(buffer, &msg.dtab));
     buffer.write_all(&msg.body)
 }
 

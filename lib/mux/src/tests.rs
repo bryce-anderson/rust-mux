@@ -107,31 +107,31 @@ fn roundtrip_tdispatch() {
     tester(&Tdispatch {
         contexts: vec![(vec![1, 2, 3], vec![4, 5, 6])],
         dest: "foo".to_string(),
-        dtable: DTable::from(vec![("foo".to_string(), "bar".to_string())]),
+        dtab: Dtab::from(vec![("foo".to_string(), "bar".to_string())]),
         body: vec![1, 2, 3],
     });
 
     tester(&Tdispatch {
         contexts: Vec::new(),
         dest: "foo".to_string(),
-        dtable: DTable::new(),
+        dtab: Dtab::new(),
         body: Vec::new(),
     });
 
 }
 
 #[test]
-fn roundtrip_dtable() {
-    fn tester(table: &DTable) {
+fn roundtrip_dtab() {
+    fn tester(table: &Dtab) {
         let mut w = new_write();
-        let _ = frames::encode_dtable(&mut w, table).unwrap();
+        let _ = frames::encode_dtab(&mut w, table).unwrap();
         let mut w = io::Cursor::new(w.into_inner());
-        let decoded = frames::decode_dtable(&mut w).unwrap();
+        let decoded = frames::decode_dtab(&mut w).unwrap();
 
         assert_eq!(table, &decoded);
     }
 
-    let mut tab = DTable::new();
+    let mut tab = Dtab::new();
 
     tester(&tab);
     tab.add_entry("a".to_string(), "b".to_string());
