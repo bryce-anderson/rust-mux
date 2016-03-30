@@ -3,10 +3,12 @@ extern crate mux;
 extern crate byteorder;
 extern crate rand;
 
+use mux::Rmsg;
 use mux::session::*;
 
 use std::net::TcpStream;
 use std::sync::Arc;
+
 use std::thread;
 use std::time::Duration;
 
@@ -28,8 +30,12 @@ fn test_session(socket: TcpStream) {
                     let b = format!("Hello, world: {}", id).into_bytes();
                     let frame = mux::Tdispatch::basic_("/foo".to_string(), b);
 
-                    let resp = session.dispatch(&frame).unwrap();
-                    let _ = std::str::from_utf8(&resp.body).unwrap();
+                    let msg = session.dispatch(&frame).unwrap();
+                    if let Rmsg::Ok(body) = msg.msg {
+                        let _ = String::from_utf8(body).unwrap();
+                    } else {
+                        panic!("Error during mux request!");
+                    }
                 } else {
                     ping_time = ping_time + session.ping().unwrap();
                 }
@@ -66,7 +72,11 @@ mod tests {
 
     fn test_crate(subcrate: &str) {
 
-        let status = Command::new("cargo").args(&["test", "-p", subcrate]).status().unwrap();
+        let status = Command::new("cargo")
+            .args(&["test", "-p", subcrate])
+            .status()
+            .unwrap();
+
         assert!(status.success(),
                 "test for sub-crate: {} returned: {:?}",
                 subcrate,

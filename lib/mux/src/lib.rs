@@ -40,10 +40,10 @@ macro_rules! tryb {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "End of input"
-                ))
+                ));
             }
             Err(byteorder::Error::Io(err)) => {
-                return Err(err)
+                return Err(err);
             }
         }
     )
@@ -98,9 +98,15 @@ pub struct Tdispatch {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Rdispatch {
-    pub status: u8,
     pub contexts: Contexts,
-    pub body: Vec<u8>,
+    pub msg: Rmsg,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum Rmsg {
+    Ok(Vec<u8>),
+    Error(String),
+    Nack(String),
 }
 
 #[derive(PartialEq, Eq, Debug)]
@@ -272,7 +278,11 @@ impl Tdispatch {
 
 impl Rdispatch {
     fn frame_size(&self) -> usize {
-        1 + context_size(&self.contexts) + self.body.len()
+        1 + context_size(&self.contexts) + match &self.msg {
+            &Rmsg::Ok(ref body) => body.len(),
+            &Rmsg::Error(ref msg) => msg.as_bytes().len(),
+            &Rmsg::Nack(ref msg) => msg.as_bytes().len(),
+        }
     }
 }
 

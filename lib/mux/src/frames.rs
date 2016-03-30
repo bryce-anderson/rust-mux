@@ -140,10 +140,16 @@ pub fn decode_init(data: &[u8]) -> io::Result<Init> {
     })
 }
 
-pub fn encode_rdispatch(buffer: &mut Write, msg: &Rdispatch) -> io::Result<()> {
-    tryb!(buffer.write_u8(msg.status));
-    try!(encode_contexts(buffer, &msg.contexts));
-    buffer.write_all(&msg.body)
+pub fn encode_rdispatch(buffer: &mut Write, frame: &Rdispatch) -> io::Result<()> {
+    let (status, body) = match &frame.msg {
+        &Rmsg::Ok(ref body) => (0, body.as_ref()),
+        &Rmsg::Error(ref msg) => (1, msg.as_bytes()),
+        &Rmsg::Nack(ref msg) => (2, msg.as_bytes()),
+    };
+
+    tryb!(buffer.write_u8(status));
+    try!(encode_contexts(buffer, &frame.contexts));
+    buffer.write_all(body)
 }
 
 // Expects to consume the whole stream
@@ -154,10 +160,20 @@ pub fn decode_rdispatch<R: Read>(mut buffer: R) -> io::Result<Rdispatch> {
     let _ = try!(buffer.read_to_end(&mut body));
 
     Ok(Rdispatch {
-        status: status,
         contexts: contexts,
-        body: body,
+        msg: try!(decode_rmsg(status, body)),
     })
+}
+
+pub fn decode_rmsg(status: u8, body: Vec<u8>) -> io::Result<Rmsg> {
+    match status {
+        0 => Ok(Rmsg::Ok(body)),
+        1 => Ok(Rmsg::Error(try!(to_string(body)))),
+        2 => Ok(Rmsg::Nack(try!(to_string(body)))),
+        other => Err(
+            io::Error::new(ErrorKind::InvalidData, format!("Invalid status code: {}", other))
+        )
+    }
 }
 
 // Expects to consume the whole stream

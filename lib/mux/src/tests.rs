@@ -18,17 +18,19 @@ fn roundtrip_rdispatch() {
     }
 
     tester(&Rdispatch {
-        status: 2,
         contexts: vec![(vec![1, 2, 3], vec![4, 5, 6])],
-        body: vec![1, 2, 3],
+        msg: Rmsg::Ok(vec![1, 2, 3]),
     });
 
     tester(&Rdispatch {
-        status: 0,
         contexts: Vec::new(),
-        body: Vec::new(),
+        msg: Rmsg::Nack("Boo".to_owned()),
     });
 
+    tester(&Rdispatch {
+        contexts: Vec::new(),
+        msg: Rmsg::Error("Boo".to_owned()),
+    });
 }
 
 #[test]
