@@ -1,10 +1,14 @@
 extern crate mux;
+extern crate time;
+
+use mux::session::*;
 
 extern crate byteorder;
 extern crate rand;
 
 use mux::Rmsg;
 
+use std::cmp::max;
 use std::net::TcpStream;
 use std::sync::Arc;
 
@@ -12,19 +16,21 @@ use std::thread;
 use std::time::Duration;
 
 fn test_session(socket: TcpStream) {
-    /*
+    println!("Testing mux client session.");
 
     let session = Arc::new(MuxSession::new(socket).unwrap());
 
-    let res = session.ping().unwrap();
-    println!("Ping time: {:?}", res);
+    let iters = 10_000;
+    let threadc = 50;
 
-    let threads: Vec<thread::JoinHandle<Duration>> = (0..50).map(|id| {
+    let startt = time::get_time();
+
+    let threads: Vec<thread::JoinHandle<Duration>> = (0..threadc).map(|id| {
         let session = session.clone();
 
         thread::spawn(move || {
             let mut ping_time = Duration::new(0, 0);
-            let iters = 10_000;
+            let mut pingc = 0;
             for _ in 0..iters {
                 if rand::random::<u8>() > 64 {
                     let b = format!("Hello, world: {}", id).into_bytes();
@@ -38,9 +44,11 @@ fn test_session(socket: TcpStream) {
                     }
                 } else {
                     ping_time = ping_time + session.ping().unwrap();
+                    pingc += 1;
                 }
             }
-            ping_time/(iters as u32)
+
+            ping_time/max(1, pingc)
         })
     }).collect();
 
@@ -50,15 +58,16 @@ fn test_session(socket: TcpStream) {
         total_ping = total_ping + t.join().unwrap();
     }
 
-    println!("Finished. Average ping: {:?}", total_ping/threadc);
-    */
+    let rps = {
+        let elapsed = time::get_time() - startt;
+        ((iters*threadc) as f32/(elapsed.num_milliseconds() as f32)) * 1e3
+    };
+
+    println!("Finished. Rps: {}. Mean Ping: {:?}", rps, total_ping/threadc);
 }
 
 fn main() {
   let socket = TcpStream::connect(("localhost", 9000)).unwrap();
-
-  println!("Testing TRequest frame.");
-  //test_trequest(&mut socket);
   test_session(socket);
 }
 

@@ -9,6 +9,7 @@ extern crate byteorder;
 
 mod dtab;
 pub mod codec;
+pub mod session;
 pub mod types;
 
 pub use dtab::*;
